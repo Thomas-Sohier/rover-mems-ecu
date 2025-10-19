@@ -1,4 +1,5 @@
-set GOARCH=386
+set GOOS=linux
+set GOARCH=arm64
 del *%GOARCH%.exe
 
 REM -ldflags="-s -w" - upsets windows defender (strips exe)
