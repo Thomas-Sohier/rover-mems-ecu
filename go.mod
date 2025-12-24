@@ -3,7 +3,7 @@ module rover-mems-agent
 go 1.23.0
 
 require (
-	github.com/distributed/sers v1.1.0
+	github.com/distributed/sers v1.1.0-rc1.0.20220718092729-b7631e8356ee
 	github.com/gin-contrib/cors v1.3.1
 	github.com/gin-gonic/gin v1.10.0
 	github.com/gorilla/websocket v1.4.2
