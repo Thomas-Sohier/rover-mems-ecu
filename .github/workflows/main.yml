@@ -26,9 +26,10 @@ jobs:
         run: |
           zip -r rover-mems-linux-arm64.zip rover-mems-linux-arm64
 
-      - name: Create draft release if main branch
-        if: github.ref == 'refs/heads/main'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release create arelease --title "Draft release" --draft --target "${GITHUB_SHA}" --notes "Draft release automatically made from successful main branch build" rover-mems-linux-arm64.zip
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rover-mems-linux-arm64
+          path: rover-mems-linux-arm64.zip
+
+    
