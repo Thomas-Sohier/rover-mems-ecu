@@ -1,63 +1,34 @@
 name: CI
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
-
-  # Allows you to run this workflow manually from the Actions tab
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  # This workflow contains a single job called "build"
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v2 # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
       - uses: actions/setup-go@v2
         with:
-          go-version: '^1.16.5'
-
-      - name: Go build for Windows
-        env:
-          GOOS: windows
-          GOARCH: 386
-        run: |
-          go build -o rover-mems-windows-i386.exe ./...
-
-      - name: Go build for Linux
+          go-version: '^1.23.0'
+      - name: Go build for Linux ARM64
         env:
           GOOS: linux
-          GOARCH: amd64
+          GOARCH: arm64
         run: |
-          go build -o rover-mems-linux-amd64 ./...
+          go build -o rover-mems-linux-arm64 ./...
 
       - name: Zip exes
         run: |
-          zip -r rover-mems-windows-i386.zip rover-mems-windows-i386.exe
-          zip -r rover-mems-linux-amd64.zip rover-mems-linux-amd64
+          zip -r rover-mems-linux-arm64.zip rover-mems-linux-arm64
 
-#       - name: Keep artifacts if master branch
-#         if: github.ref == 'refs/heads/master'
-#         uses: actions/upload-artifact@v2
-#         with:
-#           name: rover-mems
-#           path: |
-#             rover-mems.zip
-
-      - name: Create draft release if master branch
-        if: github.ref == 'refs/heads/master'
+      - name: Create draft release if main branch
+        if: github.ref == 'refs/heads/main'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create arelease --title "Draft release" --draft --target "${GITHUB_SHA}" --notes "Draft release automatically made from successful master branch build" rover-mems-windows-i386.zip rover-mems-linux-amd64.zip
-
-# Usage:  gh release create <tag> [<files>...]
-# Flags:
-#   -d, --draft             Save the release as a draft instead of publishing it
-#   -n, --notes string      Release notes
-#   -F, --notes-file file   Read release notes from file
-#   -p, --prerelease        Mark the release as a prerelease
-#       --target branch     Target branch or full commit SHA (default: main branch)
-#   -t, --title string      Release title
+          gh release create arelease --title "Draft release" --draft --target "${GITHUB_SHA}" --notes "Draft release automatically made from successful main branch build" rover-mems-linux-arm64.zip
