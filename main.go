@@ -6,7 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -33,7 +36,18 @@ var (
 	serialReadChannel = make(chan byte, 1024)
 )
 
+// main is the entry point of the application.
+// It handles flag parsing, agent initialization, signal handling setup, and the main event loop.
 func main() {
+	parseFlags()
+	initializeAgent()
+	go runWebserver()
+	stopChan := setupGracefulShutdown()
+	runEventLoop(stopChan)
+}
+
+// parseFlags parses command-line arguments to configure the agent.
+func parseFlags() {
 	serialPortFlag := flag.String("serialport", "", "Serial port to use")
 	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use")
 	modeFlag := flag.String("mode", "prod", "Operation mode: prod or debug")
@@ -48,7 +62,10 @@ func main() {
 	if *modeFlag == "debug" {
 		globalDebugMode = true
 	}
+}
 
+// initializeAgent sets up initial state, logging, and data channels.
+func initializeAgent() {
 	outgoingData = make(chan string, 1000)
 	fmt.Println("################################################################################")
 	fmt.Println("# Rover MEMS Diagnostic Agent version " + globalAgentVersion)
@@ -56,27 +73,55 @@ func main() {
 	logDebug("Debug mode enabled")
 	logDebug("Selected serial port: " + globalSelectedSerialPort)
 	logDebug("Selected ECU type: " + globalEcuType)
-
-	go runWebserver()
-
-	for {
-		err := connectLoop()
-		if err != nil {
-			logDebug(err)
-			globalDataOutputLock.Lock()
-			globalError = err.Error()
-			globalDataOutputLock.Unlock()
-		}
-
-		time.Sleep(1 * time.Second)
-	}
-
 }
 
-func connectLoop() error {
+// setupGracefulShutdown configures a channel to receive OS signals for termination.
+// It returns a channel that will receive os.Interrupt or syscall.SIGTERM signals.
+func setupGracefulShutdown() chan os.Signal {
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+	return stopChan
+}
 
+// runEventLoop manages the main application lifecycle.
+// It attempts to connect to the ECU periodically until a stop signal is received.
+func runEventLoop(stopChan chan os.Signal) {
+	// Ticker for connection retries
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	// Initial connect attempt
+	go func() {
+		attemptConnection()
+	}()
+
+	for {
+		select {
+		case <-stopChan:
+			logDebug("Shutting down...")
+			return
+		case <-ticker.C:
+			attemptConnection()
+		}
+	}
+}
+
+// attemptConnection tries to establish a connection to the ECU.
+// If it fails, it logs the error and updates the global error state.
+func attemptConnection() {
+	err := connectLoop()
+	if err != nil {
+		logDebug(err)
+		globalDataOutputLock.Lock()
+		globalError = err.Error()
+		globalDataOutputLock.Unlock()
+	}
+}
+
+// connectLoop handles the logic for discovering serial ports and connecting to the specific ECU type.
+// It returns an error if connection fails or if configuration is invalid.
+func connectLoop() error {
 	if globalEcuType == "" {
-		// return nil
 		return errors.New("No ECU type selected")
 	}
 

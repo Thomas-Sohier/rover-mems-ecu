@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/distributed/sers"
@@ -93,32 +91,35 @@ func send5BaudWakeup(sp sers.SerialPort) {
 
 // handleEcu19ResponseLoop listens for the ECU's wake-up response and handles the authentication handshake.
 func handleEcu19ResponseLoop(sp sers.SerialPort) ([]byte, error) {
+	// Set a 2 second timeout for reading properly from the ECU
+	// This avoids the need for manual sleep loops
+	err := sp.SetReadParams(1, 20.0)
+	if err != nil {
+		return nil, err
+	}
+
 	buffer := make([]byte, 0)
-	readLoops := 0
-	readLoopsLimit := 200
 
-	for readLoops < readLoopsLimit {
-		readLoops++
-		if readLoops > 1 {
-			time.Sleep(10 * time.Millisecond)
-		}
-
-		// Read from serial port
+	// We'll try to read a few times to gather the full response if it's fragmented,
+	// but the native timeout will handle the "no response" case.
+	// We loop strictly to accumulate data until we have a valid packet or fail.
+	for {
+		// Read from serial port (blocks up to 2s)
 		rb := make([]byte, 128)
-		n, _ := sp.Read(rb[:])
-		rb = rb[0:n]
-		buffer = append(buffer, rb...)
-		if n > 0 {
-			readLoops = 0 // Reset timeout counter if we get data
+		n, err := sp.Read(rb[:])
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			// Timeout occurred (no data after 2 seconds)
+			return nil, errors.New("MEMS 1.9 timed out (no response)")
 		}
 
-		if len(buffer) == 0 {
-			continue
-		}
-
+		buffer = append(buffer, rb[:n]...)
 		logDebug(buffer)
 
 		// Filter out leading zeros which might be artifacts from the wake-up sequence
+		// (Keep this logic as it handles noise)
 		for len(buffer) > 0 && buffer[0] == 0x00 {
 			buffer = buffer[1:]
 		}
@@ -136,31 +137,31 @@ func handleEcu19ResponseLoop(sp sers.SerialPort) ([]byte, error) {
 			challengeByte := buffer[2]
 			buffer = nil // Clear buffer for next read
 
+			// Small delay before sending response, just to be safe with the ECU processing time
 			time.Sleep(50 * time.Millisecond)
 
 			// Calculate and send response
 			responseByte := challengeByte ^ 0xFF
 			logDebugf("Sending challenge response: %x (derived from %x)", responseByte, challengeByte)
-			sp.Write([]byte{responseByte})
+			_, err = sp.Write([]byte{responseByte})
+			if err != nil {
+				return nil, err
+			}
 			continue
 		}
 
 		// Check if we received the "Init Stage 2" response (Echo + 0xE9)
 		if slicesEqual(buffer, ecu19SpecificInitResponse) {
 			logDebug("1.9 ECU init stage 2")
-			buffer = nil
-
+			// Switch back to normal non-blocking read params for the main loop if needed,
+			// or let ecu1xLoop handle its own config.
 			// Handshake complete, hand over to the main communication loop
-			ecu1xLoop(sp, true)
-			continue
+			return ecu1xLoop(sp, true)
+		}
+
+		// Safety break if buffer gets too large without matching anything
+		if len(buffer) > 128 {
+			return nil, errors.New("garbage received from ECU 1.9")
 		}
 	}
-
-	if readLoops >= readLoopsLimit {
-		fmt.Printf("1.9 had buffer data: got %d bytes \n%s", len(buffer), hex.Dump(buffer))
-		return nil, errors.New("MEMS 1.9 timed out")
-	}
-
-	logDebug("fell out of 1.9 readloop")
-	return nil, nil // Or appropriate error
 }
