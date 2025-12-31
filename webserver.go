@@ -71,7 +71,6 @@ func runWebserver() {
 		name := c.Param("name")
 		globalEcuType = name
 		c.String(http.StatusOK, "ECU type set to %s", name)
-		// globalAlert = "Agent confirms ECU set to "+name
 		globalDataOutputLock.Unlock()
 	})
 
@@ -80,7 +79,6 @@ func runWebserver() {
 		name := c.Param("name")
 		globalSelectedSerialPort = name
 		c.String(http.StatusOK, "Serial port set to %s", name)
-		// globalAlert = "Agent confirms ECU set to "+name
 		globalDataOutputLock.Unlock()
 	})
 
@@ -96,7 +94,8 @@ func runWebserver() {
 		wshandler(c.Writer, c.Request)
 	})
 
-	router.Run() // listen and serve on 0.0.0.0:8080 (for windows "localhost:8080")
+	logDebug("Starting webserver on :8080")
+	router.Run()
 
 }
 
@@ -111,7 +110,7 @@ func wshandler(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := wsupgrader.Upgrade(w, r, nil)
 	if err != nil {
-		fmt.Println("Failed to set websocket upgrade: %+v", err)
+		logDebug("Failed to set websocket upgrade: %+v", err)
 		return
 	}
 

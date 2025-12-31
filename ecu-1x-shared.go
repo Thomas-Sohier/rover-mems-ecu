@@ -304,15 +304,21 @@ func ecu1xParseData80(data []byte) {
 
 	// // byte 3 - coolant temp (+55 offset and 8 bit wrap)
 	globalDataOutput["coolant_temp"] = float32(data[3]) - 55
-	// TODO: fault if 59
+	if data[3] == 59 {
+		faults = append(faults, "fault_coolant_temp_value")
+	}
 
 	// //TODO:  byte 4 - (computed) ambient temp (+55 offset, 8 bit wrap) - doesn't work, might on MPI?
 	globalDataOutput["ambient_temp"] = float32(data[4]) - 55
-	// TODO: fault if 200
+	if data[4] == 200 {
+		faults = append(faults, "fault_ambient_temp_value")
+	}
 
 	// // byte 5 - intake air temp (+55 offset, 8 bit wrap)
 	globalDataOutput["intake_air_temp"] = float32(data[5]) - 55
-	// TODO: fault if 35
+	if data[5] == 35 {
+		faults = append(faults, "fault_intake_air_temp_value")
+	}
 
 	// // byte 6 - fuel temp - doesn't work on SPI, do for MPI? # defaults to FF
 	globalDataOutput["fuel_rail_temp"] = float32(data[6]) - 55
@@ -393,48 +399,54 @@ func ecu1xParseData80(data []byte) {
 	if packet_size > 15 {
 		globalDataOutput["idle_setpoint"] = float32(data[15]) * 6.1
 	}
-	//
-	// // 16 (10) unknown
+	// // 16 (10) idle hotdb
 	if packet_size > 16 {
 		globalDataOutput["idle_hotdb"] = float32(data[16])
 	}
-	//
 	// // 17 (11) unknown
-	//
+	if packet_size > 17 {
+		logDebug("Unknown byte 17: " + hex.Dump(data[17:]))
+	}
+
 	// // 18 (x12) - idle air control motor position - 0 closed, 180 fully open
 	if packet_size > 0x12 {
 		globalDataOutput["idle_valve_position"] = float32(data[0x12])
 	}
-	//
 	// // 19-20 (x13-14) - idle speed deviation (16 bits)
 	if packet_size > 0x14 {
 		idle_deviation := int(data[0x13]) << 8
 		idle_deviation += int(data[0x14])
 		globalDataOutput["idle_speed_deviation"] = float32(idle_deviation)
 	}
-	//
 	// // 21 (x15) unknown
 	if packet_size > 0x15 {
 		globalDataOutput["ignition_advance_offset"] = float32(data[0x15])
 	}
-	//
-	// // TODO: 22 (x16) - ignition advance 0.5 degrees per lsb, range -24 deg (00) to 103.5 deg (0xFF)
+	// // 22 (x16) - ignition advance 0.5 degrees per lsb, range -24 deg (00) to 103.5 deg (0xFF)
 	if packet_size > 0x16 {
-		//   // advance /= 2;
-		//   // advance -= 24;
 		globalDataOutput["ignition_advance_raw"] = float32(data[0x16])
 		globalDataOutput["ignition_advance"] = float32(data[0x16] / 2)
 	}
-	//
+
 	// // TODO: 23-24 (x17-18) - coil time 0.002ms per lsb (16 bit)
 	if packet_size > 0x18 {
 		coil_time := int(data[0x17]) << 8
 		coil_time += int(data[0x18])
+		// 0.002ms = 2 microseconds
 		globalDataOutput["coil_time_microseconds"] = float32(coil_time) * 2
 	}
 	// // 25 (x19) unknown
+	if packet_size > 0x19 {
+		logDebug("Unknown byte 19: " + hex.Dump(data[19:]))
+	}
 	// // 26 (x1a) unknown
+	if packet_size > 0x1a {
+		logDebug("Unknown byte 20: " + hex.Dump(data[20:]))
+	}
 	// // 27 (x1B) unknown
+	if packet_size > 0x1b {
+		logDebug("Unknown byte 21: " + hex.Dump(data[21:]))
+	}
 
 	globalFaults = faults
 }
@@ -442,8 +454,7 @@ func ecu1xParseData80(data []byte) {
 func ecu1xParseData7D(data []byte) {
 	globalDataOutputLock.Lock()
 	defer globalDataOutputLock.Unlock()
-	// fmt.Printf("data 7D %d bytes \n%s", len(data), hex.Dump(data))
-
+	logDebug("ECU 1.x data 7D: " + hex.Dump(data))
 	// data[0] is the command (0x7D)
 	data = data[1:]
 	packet_size := int(data[0])
@@ -458,15 +469,10 @@ func ecu1xParseData7D(data []byte) {
 	globalDataOutput["secondary_trigger_sync"] = float32((dtc_byte >> 4) & 1)
 	globalDataOutput["fan_1_control"] = float32((dtc_byte >> 5) & 1)
 	globalDataOutput["fan_2_control"] = float32((dtc_byte >> 7) & 1)
-
 	globalDataOutput["lambda_mv"] = float32(data[6]) * 5
-	// TODO: error on 435/440?
-
 	globalDataOutput["lambda_sensor_frequency"] = float32(data[7])
-
 	globalDataOutput["lambda_sensor_duty_cycle"] = float32(data[8])
 	globalDataOutput["lambda_sensor_status"] = float32(data[9]) // "Lambda sensor status? 0x01 for good, any other value for no good"
-
 	if int(data[10]) > 0 {
 		globalDataOutput["closed_loop"] = 1 // "Loop indicator, 0 for open loop and nonzero for closed loop"
 	} else {
@@ -476,7 +482,6 @@ func ecu1xParseData7D(data []byte) {
 	globalDataOutput["long_term_trim"] = float32(data[11])
 	globalDataOutput["short_term_trim_percent"] = float32(data[12])
 	globalDataOutput["carbon_can_purge_valve_duty_cycle"] = float32(data[13]) // "Carbon canister purge valve duty cycle?"
-
 	dtc2 := int(data[0xE])
 	globalDataOutput["primary_trigger_sync"] = float32((dtc2 >> 1) & 1)
 
