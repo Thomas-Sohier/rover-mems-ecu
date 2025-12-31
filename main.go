@@ -129,42 +129,65 @@ func connectLoop() error {
 	if err != nil {
 		return err
 	}
-	if len(portList) > 0 {
-		logDebug("Found the following ports that I can use:")
-		logDebug(portList)
 
+	// Case: No ports found at all
+	if len(portList) == 0 {
+		logDebug("ERROR: No serial ports found. Please check device connections and drivers.")
+		os.Exit(1)
 	}
 
 	globalDataOutputLock.Lock()
 	globalSerialPorts = portList
 	globalDataOutputLock.Unlock()
 
+	logDebug("Found the following ports that I can use:")
+	logDebug(portList)
+
 	portname := ""
 
-	if len(portList) == 1 {
-		logDebug("Only found one port so I'm going to use it")
+	// Determine which port to use
+	globalDataOutputLock.Lock()
+	selected := globalSelectedSerialPort
+	globalDataOutputLock.Unlock()
 
-		portname = portList[0]
-
-		globalDataOutputLock.Lock()
-		globalSelectedSerialPort = portname
-		globalDataOutputLock.Unlock()
-
-	} else if len(portList) > 1 {
-		globalDataOutputLock.Lock()
-		if globalSelectedSerialPort == "" {
-			globalDataOutputLock.Unlock()
-			return errors.New("Multiple COM ports found, select one")
-		} else {
-			portname = globalSelectedSerialPort
+	if selected != "" {
+		// User has selected a port
+		found := false
+		for _, p := range portList {
+			if p == selected {
+				found = true
+				break
+			}
 		}
-		globalDataOutputLock.Unlock()
+
+		if !found {
+			// Warn once per "session" implies we assume the user knows what they are doing,
+			// or the port is hidden. We log a warning and try anyway.
+			fmt.Printf("WARNING: Selected port '%s' not found in discovered list. Attempting to connect anyway...\n", selected)
+		}
+		portname = selected
 	} else {
-		return errors.New("No serial ports found, check device manager, do you need to install a driver?")
+		// No port selected
+		if len(portList) == 1 {
+			portname = portList[0]
+			logDebug("Only found one port, auto-selecting: " + portname)
+
+			globalDataOutputLock.Lock()
+			globalSelectedSerialPort = portname
+			globalDataOutputLock.Unlock()
+		} else {
+			// Multiple ports and none selected
+			// User requested: "if not set, log warn and then take first"
+			portname = portList[0]
+			fmt.Printf("WARNING: Multiple ports found and none selected. Defaulting to first available: %s\n", portname)
+
+			globalDataOutputLock.Lock()
+			globalSelectedSerialPort = portname
+			globalDataOutputLock.Unlock()
+		}
 	}
 
-	logDebug("Using port:")
-	logDebug(portname)
+	logDebug("Using port: " + portname)
 
 	switch globalEcuType {
 	case "1.x":
