@@ -174,6 +174,8 @@ func wsiteration(conn *websocket.Conn, iteration int) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println(jsondata)
+
 	conn.WriteMessage(websocket.TextMessage, jsondata)
 	return nil
 }

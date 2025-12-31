@@ -1,23 +1,25 @@
 package main
 
 import (
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"time"
-	"errors"
-	"encoding/hex"
+
 	"github.com/distributed/sers"
 )
 
 var (
-	ecu19SpecificInitCommand = []byte {0x7C}
+	ecu19SpecificInitCommand = []byte{0x7C}
 
-	ecu19WokeResponse = []byte {0x55, 0x76, 0x83}
-  ecu19SpecificInitResponse = []byte {ecu19SpecificInitCommand[0], 0xE9} // includes our echo
+	ecu19WokeResponse         = []byte{0x55, 0x76, 0x83}
+	ecu19SpecificInitResponse = []byte{ecu19SpecificInitCommand[0], 0xE9} // includes our echo
 )
 
 func readFirstBytesFromPortEcu19(fn string) ([]byte, error) {
 
-	fmt.Println("Connecting to MEMS 1.9 ECU")
+	logDebug("Connecting to MEMS 1.9 ECU")
+
 	globalConnected = false
 
 	sp, err := sers.Open(fn)
@@ -26,6 +28,7 @@ func readFirstBytesFromPortEcu19(fn string) ([]byte, error) {
 	}
 	defer sp.Close()
 
+	// 9600 baud is standard for initial connection attempts
 	err = sp.SetMode(9600, 8, sers.N, 1, sers.NO_HANDSHAKE)
 	if err != nil {
 		return nil, err
@@ -40,89 +43,124 @@ func readFirstBytesFromPortEcu19(fn string) ([]byte, error) {
 	}
 
 	mode, err := sp.GetMode()
-	fmt.Println("Serial cable set to:")
-	fmt.Println(mode)
+	logDebug("Serial cable set to:")
+	logDebug(mode)
 
-	// try the normal method first
-	ecu1xLoop(sp, true)
+	// Try the standard ECU 1.x connection method first (fast check).
+	// Sometimes the ECU might be already awake or in a compatible state.
+	if testEcu1xConnection(sp) {
+		logDebug("ECU 1.x is already awake, entering main loop")
+		return ecu1xLoop(sp, true)
+	}
 
-  // clear the line
+	// If standard loop returns, it means we need to perform the specific initialization.
+	// Reset the line state first.
 	sp.SetBreak(false)
 	time.Sleep(2000 * time.Millisecond)
 
-  start := time.Now()
+	// Perform the 5-baud init sequence to wake up the ECU.
+	// This involves manually bit-banging the 0x16 byte at a very slow speed.
+	send5BaudWakeup(sp)
+	return handleEcu19ResponseLoop(sp)
+}
 
-  // start bit
+// send5BaudWakeup performs the slow initialization sequence required by MEMS 1.9 ECUs.
+// It effectively simulates a 5-baud transmission of the byte 0x16 by manually controlling the break state.
+func send5BaudWakeup(sp sers.SerialPort) {
+	start := time.Now()
+
+	// Start bit (Break condition)
 	sp.SetBreak(true)
-  sleepUntil(start, 200)
+	sleepUntil(start, 200)
 
-  // send the byte
-  ecuAddress := 0x16
-  for i:=0; i<8; i++ {
+	// Send the byte 0x16 (0001 0110 in binary) LSB first
+	ecuAddress := 0x16
+	for i := 0; i < 8; i++ {
+		bit := (ecuAddress >> i) & 1
+		if bit > 0 {
+			sp.SetBreak(false) // Logic 1 (Mark)
+		} else {
+			sp.SetBreak(true) // Logic 0 (Space/Break)
+		}
+		// Each bit takes 200ms (1000ms / 5 baud = 200ms)
+		sleepUntil(start, 200+((i+1)*200))
+	}
 
-    bit := (ecuAddress >> i) & 1;
-    if (bit > 0) {
-        sp.SetBreak(false)
-    } else {
-        sp.SetBreak(true)
-    }
-
-    sleepUntil(start, 200 + ((i+1)*200))
-
-  }
-  // stop bit
+	// Stop bit (Mark condition)
 	sp.SetBreak(false)
-  sleepUntil(start, 200 + (8*200) + 200)
+	sleepUntil(start, 200+(8*200)+200)
+}
 
+// handleEcu19ResponseLoop listens for the ECU's wake-up response and handles the authentication handshake.
+func handleEcu19ResponseLoop(sp sers.SerialPort) ([]byte, error) {
 	buffer := make([]byte, 0)
-
 	readLoops := 0
 	readLoopsLimit := 200
+
 	for readLoops < readLoopsLimit {
 		readLoops++
 		if readLoops > 1 {
 			time.Sleep(10 * time.Millisecond)
 		}
 
+		// Read from serial port
 		rb := make([]byte, 128)
 		n, _ := sp.Read(rb[:])
-		rb = rb[0:n] // chop down to actual data size
+		rb = rb[0:n]
 		buffer = append(buffer, rb...)
 		if n > 0 {
-			readLoops = 0 // reset timeout
+			readLoops = 0 // Reset timeout counter if we get data
 		}
 
-		// clear leading zeros (from our wake up)
+		if len(buffer) == 0 {
+			continue
+		}
+
+		logDebug(buffer)
+
+		// Filter out leading zeros which might be artifacts from the wake-up sequence
 		for len(buffer) > 0 && buffer[0] == 0x00 {
 			buffer = buffer[1:]
 		}
 
-		if len(buffer) == 0 { continue }
-
-		if slicesEqual(buffer, ecu19WokeResponse) {
-      fmt.Println("1.9 ECU woke up - init stage 1")
-			buffer = nil
-			time.Sleep(50 * time.Millisecond) // TODO: is this the right sleep?
-      // todo: invert (xor) byte 2 (x83) and send back to ecu
-      // 0x83, 1000 0011 -> 0x7C 0111 1100
-      // doing manually for now (doesn't hurt)
-      sp.Write(ecu19SpecificInitCommand)
+		if len(buffer) == 0 {
 			continue
 		}
 
-    if slicesEqual(buffer, ecu19SpecificInitResponse) {
-      fmt.Println("1.9 ECU init stage 2")
-      buffer = nil
-      ecu1xLoop(sp, true)
-      continue
-    }
+		// Check if we received the "Woke Response" (0x55, 0x76, 0x83)
+		if slicesEqual(buffer, ecu19WokeResponse) {
+			logDebug("1.9 ECU woke up - init stage 1")
 
+			// The ECU sends a challenge byte (the 3rd byte, usually 0x83)
+			// We must respond with the inverse (XOR 0xFF) of this byte.
+			challengeByte := buffer[2]
+			buffer = nil // Clear buffer for next read
+
+			time.Sleep(50 * time.Millisecond)
+
+			// Calculate and send response
+			responseByte := challengeByte ^ 0xFF
+			logDebugf("Sending challenge response: %x (derived from %x)", responseByte, challengeByte)
+			sp.Write([]byte{responseByte})
+			continue
+		}
+
+		// Check if we received the "Init Stage 2" response (Echo + 0xE9)
+		if slicesEqual(buffer, ecu19SpecificInitResponse) {
+			logDebug("1.9 ECU init stage 2")
+			buffer = nil
+
+			// Handshake complete, hand over to the main communication loop
+			ecu1xLoop(sp, true)
+			continue
+		}
 	}
+
 	if readLoops >= readLoopsLimit {
 		fmt.Printf("1.9 had buffer data: got %d bytes \n%s", len(buffer), hex.Dump(buffer))
 		return nil, errors.New("MEMS 1.9 timed out")
 	}
-	fmt.Println("fell out of 1.9 readloop")
 
-	return nil, err
+	logDebug("fell out of 1.9 readloop")
+	return nil, nil // Or appropriate error
 }

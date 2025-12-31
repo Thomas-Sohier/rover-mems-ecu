@@ -12,8 +12,6 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/distributed/sers v1.1.0-rc1.0.20220718092729-b7631e8356ee h1:P8i5oNNevZfCE2JGTsCQz3kFxoJ5miYE8fs7YNuk1BU=
 github.com/distributed/sers v1.1.0-rc1.0.20220718092729-b7631e8356ee/go.mod h1:6Zc0kFQ+DnLmzlJzO7GD8N3z6XmbeEPu5qRLxWxcems=
-github.com/distributed/sers v1.1.0 h1:ikeWvkO7V0/+hzS0qQeFvjJbEqyNhPLjLWAiUqWupdU=
-github.com/distributed/sers v1.1.0/go.mod h1:aKSQgj7HFcBZ9hsjqOeSp4Z7Kk4ypNR7bVsggdWc0P4=
 github.com/gabriel-vasile/mimetype v1.4.8 h1:FfZ3gj38NjllZIeJAmMhr+qKL8Wu+nOoI3GqacKw1NM=
 github.com/gabriel-vasile/mimetype v1.4.8/go.mod h1:ByKUIKGjh1ODkGM1asKUbQZOLGrPjydw3hYPU2YU9t8=
 github.com/gin-contrib/cors v1.3.1 h1:doAsuITavI4IOcd0Y19U4B+O0dNWihRyX//nn4sEmgA=

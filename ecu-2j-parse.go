@@ -5,12 +5,13 @@ import (
 	// "os"
 	"time"
 )
+
 // todo - all the point values are being lost
 
 func twojParseResponse(actualData []byte) {
 
-  globalDataOutputLock.Lock()
-  defer globalDataOutputLock.Unlock()
+	globalDataOutputLock.Lock()
+	defer globalDataOutputLock.Unlock()
 
 	if slicesEqual(actualData, twojWokeResponse) {
 		fmt.Println("< ECU woke up")
@@ -27,7 +28,7 @@ func twojParseResponse(actualData []byte) {
 		twojSeed = int(actualData[2]) << 8
 		twojSeed += int(actualData[3])
 		// do key generation
-		if (twojSeed == 0) {
+		if twojSeed == 0 {
 			fmt.Println("Already logged in (seed was 0)")
 			twojKey = 0
 		} else {
@@ -54,7 +55,6 @@ func twojParseResponse(actualData []byte) {
 		globalAlert = "ECU reports set to learn new immo code"
 		return
 	}
-
 
 	if slicesEqual(actualData[0:2], twojFaultsResponse) {
 		fmt.Println("< Faults")
@@ -109,7 +109,7 @@ func twojParseResponse(actualData []byte) {
 		fmt.Println("got data packet 07")
 		mapkpa := int(actualData[2]) << 8
 		mapkpa += int(actualData[3])
-		globalDataOutput["map_sensor_kpa"] = float32(mapkpa)/100
+		globalDataOutput["map_sensor_kpa"] = float32(mapkpa) / 100
 		return
 	}
 	if slicesEqual(actualData[0:2], twojResponseData08) {
@@ -161,8 +161,8 @@ func twojParseResponse(actualData []byte) {
 	}
 	if slicesEqual(actualData[0:2], twojResponseData0F) {
 		fmt.Println("got data packet 0F")
-		globalDataOutput["throttle_switch"] = float32(int(actualData[2]) & 1) // 0b00000001
-		globalDataOutput["ignition"] = float32((int(actualData[2]) >> 1) & 1) // 0b00000010
+		globalDataOutput["throttle_switch"] = float32(int(actualData[2]) & 1)  // 0b00000001
+		globalDataOutput["ignition"] = float32((int(actualData[2]) >> 1) & 1)  // 0b00000010
 		globalDataOutput["ac_button"] = float32((int(actualData[2]) >> 3) & 1) // 0b00001000
 		return
 	}
@@ -179,7 +179,7 @@ func twojParseResponse(actualData []byte) {
 		// 0 means OK, 1 bad
 		// will swap for our purposes
 		// output is 1 for yes
-		primaryTriggerSync := actualData[2] & 1 // 0b00000001
+		primaryTriggerSync := actualData[2] & 1          // 0b00000001
 		secondaryTriggerSync := (actualData[2] >> 1) & 1 //0b00000010
 		globalDataOutput["primary_trigger_sync"] = float32(1 - primaryTriggerSync)
 		globalDataOutput["secondary_trigger_sync"] = float32(1 - secondaryTriggerSync)
@@ -231,7 +231,7 @@ func twojParseResponse(actualData []byte) {
 	// if we get here then something is wrong with the data
 	// todo: cope with 7F (fail/no)
 
-	if (actualData[0] == 0x7F) {
+	if actualData[0] == 0x7F {
 		fmt.Print("Negative response - 0x7F")
 		if len(actualData) >= 2 {
 			fmt.Print(" ")
@@ -247,7 +247,7 @@ func twojParseResponse(actualData []byte) {
 		return
 	}
 
-	if (actualData[0] == 0x63) {
+	if actualData[0] == 0x63 {
 		// fmt.Println(actualData)
 		fmt.Print("Hex: ")
 		// start at 1, ignoring the command reply
@@ -266,7 +266,4 @@ func twojParseResponse(actualData []byte) {
 	for x := 0; x < len(actualData); x++ {
 		fmt.Printf(" %x", actualData[x])
 	}
-	fmt.Println("")
-	return
-
 }

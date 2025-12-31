@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ var (
 	globalUserCommand        = ""
 	globalAlert              = "" // pops up on web UI then closes itself
 	globalError              = "" // pops up on web UI and stays until closed
+	globalDebugMode          = false
 
 	globalDataOutput     = map[string]float32{}
 	globalDataOutputLock = sync.RWMutex{}
@@ -32,17 +34,35 @@ var (
 )
 
 func main() {
+	serialPortFlag := flag.String("serialport", "", "Serial port to use")
+	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use")
+	modeFlag := flag.String("mode", "prod", "Operation mode: prod or debug")
+	flag.Parse()
 
-	outgoingData = make(chan string, 1000) // buffer on it in case the web browser is slow?
+	if *serialPortFlag != "" {
+		globalSelectedSerialPort = *serialPortFlag
+	}
+	if *ecuTypeFlag != "" {
+		globalEcuType = *ecuTypeFlag
+	}
+	if *modeFlag == "debug" {
+		globalDebugMode = true
+	}
+
+	outgoingData = make(chan string, 1000)
 	fmt.Println("################################################################################")
 	fmt.Println("# Rover MEMS Diagnostic Agent version " + globalAgentVersion)
 	fmt.Println("################################################################################")
+	logDebug("Debug mode enabled")
+	logDebug("Selected serial port: " + globalSelectedSerialPort)
+	logDebug("Selected ECU type: " + globalEcuType)
+
 	go runWebserver()
 
 	for {
 		err := connectLoop()
 		if err != nil {
-			// fmt.Println(err)
+			logDebug(err)
 			globalDataOutputLock.Lock()
 			globalError = err.Error()
 			globalDataOutputLock.Unlock()
@@ -55,19 +75,20 @@ func main() {
 
 func connectLoop() error {
 
-	// if globalEcuType == "" {
-	// 	return nil
-	// 	// return errors.New("No ECU type selected")
-	// }
+	if globalEcuType == "" {
+		// return nil
+		return errors.New("No ECU type selected")
+	}
 
 	portList, err := nativeGetPortsList()
 	if err != nil {
 		return err
 	}
-	// if len(portList) > 0 {
-	// 	fmt.Println("Found the following ports that I can use:")
-	// 	fmt.Println(portList)
-	// }
+	if len(portList) > 0 {
+		logDebug("Found the following ports that I can use:")
+		logDebug(portList)
+
+	}
 
 	globalDataOutputLock.Lock()
 	globalSerialPorts = portList
@@ -76,7 +97,8 @@ func connectLoop() error {
 	portname := ""
 
 	if len(portList) == 1 {
-		// fmt.Println("Only found one port so I'm going to use it")
+		logDebug("Only found one port so I'm going to use it")
+
 		portname = portList[0]
 
 		globalDataOutputLock.Lock()
@@ -87,8 +109,7 @@ func connectLoop() error {
 		globalDataOutputLock.Lock()
 		if globalSelectedSerialPort == "" {
 			globalDataOutputLock.Unlock()
-			// return errors.New("Multiple COM ports found, select one")
-			return nil
+			return errors.New("Multiple COM ports found, select one")
 		} else {
 			portname = globalSelectedSerialPort
 		}
@@ -97,28 +118,20 @@ func connectLoop() error {
 		return errors.New("No serial ports found, check device manager, do you need to install a driver?")
 	}
 
-	// TODO: send normal logging data straight to UI using "outgoingData"
-	// fmt.Println("Using port:")
-	// fmt.Println(portname)
+	logDebug("Using port:")
+	logDebug(portname)
 
 	switch globalEcuType {
 	case "1.x":
 		_, err = readFirstBytesFromPortEcu1x(portname)
-		break
 	case "rc5":
 		_, err = readFirstBytesFromPortRc5(portname)
-		break
 	case "2J":
 		_, err = readFirstBytesFromPortTwoj(portname)
-		break
 	case "1.9":
 		_, err = readFirstBytesFromPortEcu19(portname)
-		break
 	case "3":
 		_, err = readFirstBytesFromPortEcu3(portname)
-		break
-	case "":
-		return nil
 	default:
 		return errors.New("Unknown ECU type set")
 	}
