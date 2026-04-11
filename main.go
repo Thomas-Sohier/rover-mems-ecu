@@ -50,7 +50,7 @@ func main() {
 // parseFlags parses command-line arguments to configure the agent.
 func parseFlags() {
 	serialPortFlag := flag.String("serialport", "", "Serial port to use")
-	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3)")
+	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3, fake)")
 	modeFlag := flag.String("mode", "prod", "Operation mode: prod or debug")
 	httpPortFlag := flag.String("httpport", ":8080", "HTTP server bind address (e.g. :8080 or 0.0.0.0:9090)")
 	flag.Parse()
@@ -133,6 +133,11 @@ func connectLoop() error {
 
 	if globalEcuType == "" {
 		return errors.New("No ECU type selected")
+	}
+
+	// Fake mode: skip all serial port logic
+	if globalEcuType == "fake" {
+		return fakeEcuLoop()
 	}
 
 	portList, err := nativeGetPortsList()

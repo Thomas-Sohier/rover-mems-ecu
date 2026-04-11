@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	_ "embed"
 	"io"
 	"log"
 	"net/http"
@@ -12,6 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+//go:embed dashboard.html
+var dashboardHTML []byte
 
 // wsupgrader is configured once at package level.
 // CheckOrigin allows all origins (suitable for a local diagnostic tool).
@@ -37,6 +41,11 @@ func runWebserver(addr string) {
 		// List discovered serial ports and currently selected one
 		api.GET("/ports", apiPortsHandler)
 	}
+
+	// --- Dashboard ---
+	router.GET("/", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", dashboardHTML)
+	})
 
 	// --- Legacy flat routes (kept for backwards compatibility) ---
 	router.GET("/ping", func(c *gin.Context) {

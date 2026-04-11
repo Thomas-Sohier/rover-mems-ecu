@@ -38,14 +38,29 @@ func timestampMs() int64 {
 	return time.Now().UnixNano() / int64(time.Millisecond)
 }
 
+const maxLogLines = 500
+
+func appendLogLine(line string) {
+	globalDataOutputLock.Lock()
+	globalLogLines = append(globalLogLines, line)
+	if len(globalLogLines) > maxLogLines {
+		globalLogLines = globalLogLines[len(globalLogLines)-maxLogLines:]
+	}
+	globalDataOutputLock.Unlock()
+}
+
 func logDebug(a ...interface{}) {
+	line := fmt.Sprint(a...)
+	appendLogLine(line)
 	if globalDebugMode {
-		fmt.Println(a...)
+		fmt.Println(line)
 	}
 }
 
 func logDebugf(format string, a ...interface{}) {
+	line := fmt.Sprintf(format, a...)
+	appendLogLine(line)
 	if globalDebugMode {
-		fmt.Printf(format+"\n", a...)
+		fmt.Println(line)
 	}
 }
