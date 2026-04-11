@@ -23,6 +23,7 @@ var (
 	globalAlert              = "" // pops up on web UI then closes itself
 	globalError              = "" // pops up on web UI and stays until closed
 	globalDebugMode          = false
+	globalHTTPPort           = ":8080"
 
 	globalDataOutput     = map[string]float32{}
 	globalDataOutputLock = sync.RWMutex{}
@@ -41,7 +42,7 @@ var (
 func main() {
 	parseFlags()
 	initializeAgent()
-	go runWebserver()
+	go runWebserver(globalHTTPPort)
 	stopChan := setupGracefulShutdown()
 	runEventLoop(stopChan)
 }
@@ -49,8 +50,9 @@ func main() {
 // parseFlags parses command-line arguments to configure the agent.
 func parseFlags() {
 	serialPortFlag := flag.String("serialport", "", "Serial port to use")
-	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use")
+	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3)")
 	modeFlag := flag.String("mode", "prod", "Operation mode: prod or debug")
+	httpPortFlag := flag.String("httpport", ":8080", "HTTP server bind address (e.g. :8080 or 0.0.0.0:9090)")
 	flag.Parse()
 
 	if *serialPortFlag != "" {
@@ -62,6 +64,7 @@ func parseFlags() {
 	if *modeFlag == "debug" {
 		globalDebugMode = true
 	}
+	globalHTTPPort = *httpPortFlag
 }
 
 // initializeAgent sets up initial state, logging, and data channels.
@@ -84,24 +87,26 @@ func setupGracefulShutdown() chan os.Signal {
 }
 
 // runEventLoop manages the main application lifecycle.
-// It attempts to connect to the ECU periodically until a stop signal is received.
+// It attempts to connect to the ECU, then waits 1 second before retrying on failure.
+// Signal handling is checked between each attempt.
 func runEventLoop(stopChan chan os.Signal) {
-	// Ticker for connection retries
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	// Initial connect attempt
-	go func() {
-		attemptConnection()
-	}()
-
 	for {
+		// Check for shutdown before each attempt
 		select {
 		case <-stopChan:
 			logDebug("Shutting down...")
 			return
-		case <-ticker.C:
-			attemptConnection()
+		default:
+		}
+
+		attemptConnection()
+
+		// Wait 1 second before retrying, but honour shutdown immediately
+		select {
+		case <-stopChan:
+			logDebug("Shutting down...")
+			return
+		case <-time.After(1 * time.Second):
 		}
 	}
 }
@@ -119,8 +124,13 @@ func attemptConnection() {
 }
 
 // connectLoop handles the logic for discovering serial ports and connecting to the specific ECU type.
-// It returns an error if connection fails or if configuration is invalid.
+// It returns an error if connection fails or if configuration is invalid, nil on clean exit.
 func connectLoop() error {
+	// Mark as disconnected at the start of each attempt so the UI reflects reality
+	globalDataOutputLock.Lock()
+	globalConnected = false
+	globalDataOutputLock.Unlock()
+
 	if globalEcuType == "" {
 		return errors.New("No ECU type selected")
 	}
@@ -207,6 +217,5 @@ func connectLoop() error {
 		return err
 	}
 
-	return errors.New("Connect loop finished")
-
+	return nil
 }

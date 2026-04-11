@@ -3,14 +3,12 @@ package main
 // specifically for 1.2,1.3,1.6
 
 import (
-	"fmt"
-
 	"github.com/distributed/sers"
 )
 
 func readFirstBytesFromPortEcu1x(fn string) ([]byte, error) {
 
-	fmt.Println("Connecting to MEMS 1.x (1.2, 1.3, 1.6) ECU")
+	logDebug("Connecting to MEMS 1.x (1.2, 1.3, 1.6) ECU")
 	globalConnected = false
 
 	sp, err := sers.Open(fn)

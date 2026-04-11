@@ -66,11 +66,14 @@ func ecu1xNextCommand(previousResponse byte) byte {
 	if globalUserCommand != "" {
 		command, ok := ecu1xUserCommands[globalUserCommand]
 		if ok {
+			// Capture before clearing so the log shows the actual command name
+			cmd := globalUserCommand
 			globalUserCommand = ""
-			fmt.Println("> " + globalUserCommand)
+			fmt.Println("> " + cmd)
 			return command
 		} else {
-			fmt.Println("Asked to perform a user command but don't understand it")
+			logDebug("Unknown user command:", globalUserCommand)
+			globalUserCommand = ""
 		}
 	}
 
@@ -98,52 +101,10 @@ func ecu1xNextCommand(previousResponse byte) byte {
 }
 
 func ecu1xSend(sp sers.SerialPort, data byte) {
-	logDebugf("[DEBUG] Sending byte: %X", data)
+	logDebugf("Sending byte: %02X", data)
 	sp.Write([]byte{data})
 	ecu1xGotKlineEcho = false
 	ecu1xLastKlineByte = data
-}
-
-// testEcu1xConnection performs a quick check to see if the ECU is already awake and responsive.
-// It sends an initialization byte and waits for a short period for a valid response.
-func testEcu1xConnection(sp sers.SerialPort) bool {
-	logDebug("Testing ECU connection (fast check)...")
-
-	// Send init byte 0xCA
-	ecu1xSend(sp, 0xCA)
-
-	buffer := make([]byte, 0)
-	readLoops := 0
-	// 50 loops * 10ms = 500ms max wait
-	readLoopsLimit := 50
-
-	for readLoops < readLoopsLimit {
-		readLoops++
-		time.Sleep(10 * time.Millisecond)
-
-		rb := make([]byte, 128)
-		n, _ := sp.Read(rb[:])
-		if n > 0 {
-			buffer = append(buffer, rb[0:n]...)
-			// Filter out our own echo and any leading zeros
-			for len(buffer) > 0 {
-				if buffer[0] == 0xCA || buffer[0] == 0x00 {
-					buffer = buffer[1:]
-				} else {
-					break
-				}
-			}
-
-			if len(buffer) > 0 {
-				// We got something valid back (likely 0x75 or 0x80)
-				logDebugf("Fast check success, got: %X", buffer[0])
-				return true
-			}
-		}
-	}
-
-	logDebug("Fast check failed (no response)")
-	return false
 }
 
 func ecu1xLoop(sp sers.SerialPort, kline bool) ([]byte, error) {
@@ -167,9 +128,8 @@ READLOOP:
 		n, _ := sp.Read(rb[:])
 		rb = rb[0:n] // chop down to actual data size
 		buffer = append(buffer, rb...)
-		fmt.Println(buffer)
 		if n > 0 {
-			readLoops = 0 // reset timeout
+			readLoops = 0 // reset inactivity counter on any received byte
 		}
 
 		if len(buffer) == 0 {
@@ -177,14 +137,15 @@ READLOOP:
 		}
 
 		if kline && !ecu1xGotKlineEcho {
+			// K-line is half-duplex: the byte we send is echoed back on the same wire.
+			// Discard our own echo before processing the ECU's actual response.
 			if buffer[0] == ecu1xLastKlineByte {
-
 				ecu1xGotKlineEcho = true
-				fmt.Printf("[DEBUG] Got kline echo: %X. Remaining buffer: %v\n", buffer[0], buffer[1:])
+				logDebugf("K-line echo consumed: %02X (buffer remaining: %v)", buffer[0], buffer[1:])
 				buffer = buffer[1:]
 				continue
 			} else {
-				fmt.Printf("[DEBUG] Buffer[0] %X != LastKlineByte %X\n", buffer[0], ecu1xLastKlineByte)
+				logDebugf("Expected K-line echo %02X, got %02X", ecu1xLastKlineByte, buffer[0])
 			}
 		}
 
@@ -205,7 +166,7 @@ READLOOP:
 			}
 		}
 
-		fmt.Printf("[DEBUG] Processing byte: %X\n", buffer[0])
+		logDebugf("Processing byte: %02X", buffer[0])
 		switch buffer[0] {
 		case ecu1xRequestClearFaults:
 			if len(buffer) >= 2 && buffer[1] == 0x00 {
@@ -216,70 +177,74 @@ READLOOP:
 				continue
 			}
 		case 0xCA:
-			fmt.Println("Got CA")
+			// Init step 1: ECU echoes 0xCA — reply with 0x75
+			logDebug("Got 0xCA")
 			ecu1xSend(sp, ecu1xNextCommand(buffer[0]))
 			buffer = nil
 			continue
 
 		case 0x75:
-			fmt.Println("Got 75")
+			// Init step 2: ECU echoes 0x75 — reply with 0xF4
+			logDebug("Got 0x75")
 			ecu1xSend(sp, ecu1xNextCommand(buffer[0]))
 			buffer = nil
 			continue
 
 		case 0xF4:
+			// Init step 3: ECU echoes 0xF4 followed by 0x00 — reply with 0xD0
 			if len(buffer) >= 2 && buffer[1] == 0x00 {
-				fmt.Println("Got F4 00")
+				logDebug("Got 0xF4 0x00")
 				ecu1xSend(sp, ecu1xNextCommand(buffer[0]))
 				buffer = nil
 				continue
 			}
 		case 0xD0:
+			// Init step 4: ECU echoes 0xD0 and sends 4-byte ECU ID — enter data mode
 			if len(buffer) >= 5 {
 				globalConnected = true
-				fmt.Println("Got D0 and ECU ID")
-				fmt.Printf("ECU ID:\n%s", hex.Dump(buffer[1:5]))
+				logDebugf("Got 0xD0, ECU ID: %s", hex.Dump(buffer[1:5]))
 				ecu1xSend(sp, ecu1xNextCommand(buffer[0]))
 				buffer = nil
 				continue
 			}
 		case 0x80:
+			// Data packet type 1: engine data (RPM, temps, sensors…)
 			if len(buffer) >= 2 {
 				fullLength := int(buffer[1]) + 1
 				if len(buffer) >= fullLength {
-					fmt.Println("Got data 80")
+					logDebug("Got data 0x80")
 					ecu1xParseData80(buffer)
 					ecu1xSend(sp, ecu1xNextCommand(buffer[0]))
 					buffer = nil
 				}
 			}
-			// not got the full packet yet
+			// Accumulate until full packet arrives
 			continue
 
 		case 0x7D:
+			// Data packet type 2: lambda, ignition, trim…
 			if len(buffer) >= 2 {
 				fullLength := int(buffer[1]) + 1
 				if len(buffer) >= fullLength {
-					fmt.Println("Got data 7D")
+					logDebug("Got data 0x7D")
 					ecu1xParseData7D(buffer)
 					ecu1xSend(sp, ecu1xNextCommand(buffer[0]))
 					buffer = nil
 				}
 			}
-			// not got the full packet yet
+			// Accumulate until full packet arrives
 			continue
 		default:
-			// unknown command?
-			// could be one of the normal commands waiting for their 2nd byte so don't do anything here
-			fmt.Printf("Got unknown command %X\n", buffer[0])
+			// Could be a partial multi-byte response — wait for more data
+			logDebugf("Unrecognised byte %02X — waiting for more data", buffer[0])
 		}
 
 	}
 	if readLoops >= readLoopsLimit {
-		fmt.Printf("had buffer data: got %d bytes \n%s", len(buffer), hex.Dump(buffer))
+		logDebugf("Timed out — buffer: %d bytes\n%s", len(buffer), hex.Dump(buffer))
 		return nil, errors.New("MEMS 1.x timed out")
 	}
-	fmt.Println("fell out of readloop")
+	logDebug("Read loop exited normally")
 
 	return nil, nil
 
@@ -290,12 +255,12 @@ func ecu1xParseData80(data []byte) {
 	defer globalDataOutputLock.Unlock()
 
 	faults := []string{}
-	fmt.Printf("data 80 %d bytes \n%s", len(data), hex.Dump(data))
+	logDebugf("data 0x80: %d bytes\n%s", len(data), hex.Dump(data))
 
 	// data[0] is the command (0x80)
 	data = data[1:]
 
-	packet_size := int(data[0])
+	packetSize := int(data[0])
 	// 14 bytes length for mems 1.3
 	// ? bytes length for mems 1.6
 
@@ -396,55 +361,55 @@ func ecu1xParseData80(data []byte) {
 	}
 
 	// // 15(F) idle setting - x6.1
-	if packet_size > 15 {
+	if packetSize > 15 {
 		globalDataOutput["idle_setpoint"] = float32(data[15]) * 6.1
 	}
 	// // 16 (10) idle hotdb
-	if packet_size > 16 {
+	if packetSize > 16 {
 		globalDataOutput["idle_hotdb"] = float32(data[16])
 	}
 	// // 17 (11) unknown
-	if packet_size > 17 {
+	if packetSize > 17 {
 		logDebug("Unknown byte 17: " + hex.Dump(data[17:]))
 	}
 
 	// // 18 (x12) - idle air control motor position - 0 closed, 180 fully open
-	if packet_size > 0x12 {
+	if packetSize > 0x12 {
 		globalDataOutput["idle_valve_position"] = float32(data[0x12])
 	}
 	// // 19-20 (x13-14) - idle speed deviation (16 bits)
-	if packet_size > 0x14 {
-		idle_deviation := int(data[0x13]) << 8
-		idle_deviation += int(data[0x14])
-		globalDataOutput["idle_speed_deviation"] = float32(idle_deviation)
+	if packetSize > 0x14 {
+		idleDeviation := int(data[0x13]) << 8
+		idleDeviation += int(data[0x14])
+		globalDataOutput["idle_speed_deviation"] = float32(idleDeviation)
 	}
 	// // 21 (x15) unknown
-	if packet_size > 0x15 {
+	if packetSize > 0x15 {
 		globalDataOutput["ignition_advance_offset"] = float32(data[0x15])
 	}
 	// // 22 (x16) - ignition advance 0.5 degrees per lsb, range -24 deg (00) to 103.5 deg (0xFF)
-	if packet_size > 0x16 {
+	if packetSize > 0x16 {
 		globalDataOutput["ignition_advance_raw"] = float32(data[0x16])
 		globalDataOutput["ignition_advance"] = float32(data[0x16] / 2)
 	}
 
 	// // TODO: 23-24 (x17-18) - coil time 0.002ms per lsb (16 bit)
-	if packet_size > 0x18 {
-		coil_time := int(data[0x17]) << 8
-		coil_time += int(data[0x18])
-		// 0.002ms = 2 microseconds
-		globalDataOutput["coil_time_microseconds"] = float32(coil_time) * 2
+	if packetSize > 0x18 {
+		coilTime := int(data[0x17]) << 8
+		coilTime += int(data[0x18])
+		// 0.002ms per LSB = 2 microseconds per count
+		globalDataOutput["coil_time_microseconds"] = float32(coilTime) * 2
 	}
 	// // 25 (x19) unknown
-	if packet_size > 0x19 {
+	if packetSize > 0x19 {
 		logDebug("Unknown byte 19: " + hex.Dump(data[19:]))
 	}
 	// // 26 (x1a) unknown
-	if packet_size > 0x1a {
+	if packetSize > 0x1a {
 		logDebug("Unknown byte 20: " + hex.Dump(data[20:]))
 	}
 	// // 27 (x1B) unknown
-	if packet_size > 0x1b {
+	if packetSize > 0x1b {
 		logDebug("Unknown byte 21: " + hex.Dump(data[21:]))
 	}
 
@@ -457,18 +422,18 @@ func ecu1xParseData7D(data []byte) {
 	logDebug("ECU 1.x data 7D: " + hex.Dump(data))
 	// data[0] is the command (0x7D)
 	data = data[1:]
-	packet_size := int(data[0])
+	packetSize := int(data[0])
 
 	globalDataOutput["ignition_switch"] = float32(data[1])
 	globalDataOutput["throttle_angle"] = float32(data[2]) / 2
 	// 0x03  Unknown
 	globalDataOutput["air_fuel_ratio"] = float32(data[4]) // "A/F ratio? might just be 0xFF (unknown)" ## if it's FF then don't output?
 
-	dtc_byte := int(data[5])
-	globalDataOutput["lambda_heater_relay"] = float32((dtc_byte >> 3) & 1)
-	globalDataOutput["secondary_trigger_sync"] = float32((dtc_byte >> 4) & 1)
-	globalDataOutput["fan_1_control"] = float32((dtc_byte >> 5) & 1)
-	globalDataOutput["fan_2_control"] = float32((dtc_byte >> 7) & 1)
+	dtcByte := int(data[5])
+	globalDataOutput["lambda_heater_relay"] = float32((dtcByte >> 3) & 1)
+	globalDataOutput["secondary_trigger_sync"] = float32((dtcByte >> 4) & 1)
+	globalDataOutput["fan_1_control"] = float32((dtcByte >> 5) & 1)
+	globalDataOutput["fan_2_control"] = float32((dtcByte >> 7) & 1)
 	globalDataOutput["lambda_mv"] = float32(data[6]) * 5
 	globalDataOutput["lambda_sensor_frequency"] = float32(data[7])
 	globalDataOutput["lambda_sensor_duty_cycle"] = float32(data[8])
@@ -485,7 +450,7 @@ func ecu1xParseData7D(data []byte) {
 	dtc2 := int(data[0xE])
 	globalDataOutput["primary_trigger_sync"] = float32((dtc2 >> 1) & 1)
 
-	if packet_size >= 16 {
+	if packetSize >= 16 {
 		globalDataOutput["idle_base_position"] = float32(data[15])
 	}
 
@@ -493,12 +458,12 @@ func ecu1xParseData7D(data []byte) {
 	// 0x11  Unknown
 	// 0x12  Unknown
 	// 0x13  Unknown
-	if packet_size >= 21 {
+	if packetSize >= 21 {
 		globalDataOutput["idle_error"] = float32(data[20])
 	}
 	// 0x15  Unknown
 
-	if packet_size >= 0x16 {
+	if packetSize >= 0x16 {
 		dtc3 := int(data[0x16])
 		globalDataOutput["injector_1_4_driver"] = float32((dtc3 >> 1) & 1)
 		globalDataOutput["injector_2_3_driver"] = float32((dtc3 >> 2) & 1)
@@ -516,7 +481,7 @@ func ecu1xParseData7D(data []byte) {
 	// 0x1C  Unknown
 	// 0x1D  Unknown
 	// 0x1E  Unknown
-	if packet_size >= 0x1F {
+	if packetSize >= 0x1F {
 		globalDataOutput["crank_counter"] = float32(data[0x1F])
 	}
 

@@ -2,8 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -14,167 +13,169 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func runWebserver() {
-
-	gin.SetMode(gin.ReleaseMode)
-	gin.DefaultWriter = ioutil.Discard // to disable web hits output to console
-	// gin.DefaultWriter = colorable.NewColorableStdout()
-	// gin.ForceConsoleColor()
-
-	router := gin.Default()
-	router.Use(cors.Default()) // allow all origins
-
-	router.GET("/api", func(c *gin.Context) {
-		globalDataOutputLock.Lock()
-		c.JSON(200, gin.H{
-			"faults":       globalFaults,
-			"connected":    globalConnected,
-			"ecuType":      globalEcuType,
-			"userCommand":  globalUserCommand,
-			"alert":        globalAlert,
-			"error":        globalError,
-			"ecuData":      globalDataOutput,
-			"agentVersion": globalAgentVersion,
-		})
-		// clear the error and alert for next time
-		if globalAlert != "" {
-			globalAlert = ""
-		}
-		if globalError != "" {
-			globalError = ""
-		}
-		globalDataOutputLock.Unlock()
-	})
-
-	router.GET("/ping", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"message": "pong",
-		})
-	})
-
-	router.GET("/connected", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"connected": globalConnected,
-		})
-	})
-
-	router.GET("/faults", func(c *gin.Context) {
-		globalDataOutputLock.RLock()
-		c.JSON(200, gin.H{
-			"faults": globalFaults,
-		})
-		globalDataOutputLock.RUnlock()
-	})
-
-	router.GET("/ecu/:name", func(c *gin.Context) {
-		globalDataOutputLock.Lock()
-		name := c.Param("name")
-		globalEcuType = name
-		c.String(http.StatusOK, "ECU type set to %s", name)
-		globalDataOutputLock.Unlock()
-	})
-
-	router.GET("/serialPort/:name", func(c *gin.Context) {
-		globalDataOutputLock.Lock()
-		name := c.Param("name")
-		globalSelectedSerialPort = name
-		c.String(http.StatusOK, "Serial port set to %s", name)
-		globalDataOutputLock.Unlock()
-	})
-
-	router.GET("/command/:name", func(c *gin.Context) {
-		globalDataOutputLock.Lock()
-		name := c.Param("name")
-		globalUserCommand = name
-		c.String(http.StatusOK, "User command accepted %s", name)
-		globalDataOutputLock.Unlock()
-	})
-
-	router.GET("/ws", func(c *gin.Context) {
-		wshandler(c.Writer, c.Request)
-	})
-
-	logDebug("Starting webserver on :8080")
-	router.Run()
-
-}
-
+// wsupgrader is configured once at package level.
+// CheckOrigin allows all origins (suitable for a local diagnostic tool).
 var wsupgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-func wshandler(w http.ResponseWriter, r *http.Request) {
-	wsupgrader.CheckOrigin = func(r *http.Request) bool {
-		return true
+// runWebserver starts the HTTP/WebSocket server on the given bind address (e.g. ":8080").
+func runWebserver(addr string) {
+	gin.SetMode(gin.ReleaseMode)
+	gin.DefaultWriter = io.Discard // silence Gin's request log in production
+
+	router := gin.Default()
+	router.Use(cors.Default())
+
+	// --- State read/write endpoints ---
+	api := router.Group("/api")
+	{
+		// Full state snapshot (also clears one-shot alert/error fields)
+		api.GET("", apiStateHandler)
+		// List discovered serial ports and currently selected one
+		api.GET("/ports", apiPortsHandler)
 	}
+
+	// --- Legacy flat routes (kept for backwards compatibility) ---
+	router.GET("/ping", func(c *gin.Context) {
+		c.JSON(200, gin.H{"message": "pong"})
+	})
+	router.GET("/connected", func(c *gin.Context) {
+		globalDataOutputLock.RLock()
+		connected := globalConnected
+		globalDataOutputLock.RUnlock()
+		c.JSON(200, gin.H{"connected": connected})
+	})
+	router.GET("/faults", func(c *gin.Context) {
+		globalDataOutputLock.RLock()
+		faults := globalFaults
+		globalDataOutputLock.RUnlock()
+		c.JSON(200, gin.H{"faults": faults})
+	})
+
+	// --- Configuration endpoints ---
+	router.GET("/ecu/:name", func(c *gin.Context) {
+		name := c.Param("name")
+		globalDataOutputLock.Lock()
+		globalEcuType = name
+		globalDataOutputLock.Unlock()
+		c.String(http.StatusOK, "ECU type set to %s", name)
+	})
+	router.GET("/serialPort/:name", func(c *gin.Context) {
+		name := c.Param("name")
+		globalDataOutputLock.Lock()
+		globalSelectedSerialPort = name
+		globalDataOutputLock.Unlock()
+		c.String(http.StatusOK, "Serial port set to %s", name)
+	})
+	router.GET("/command/:name", func(c *gin.Context) {
+		name := c.Param("name")
+		globalDataOutputLock.Lock()
+		globalUserCommand = name
+		globalDataOutputLock.Unlock()
+		c.String(http.StatusOK, "User command accepted %s", name)
+	})
+
+	// --- WebSocket ---
+	router.GET("/ws", func(c *gin.Context) {
+		wsHandler(c.Writer, c.Request)
+	})
+
+	logDebug("Starting webserver on " + addr)
+	router.Run(addr)
+}
+
+// apiStateHandler returns the full agent state as JSON.
+// It atomically clears the one-shot alert and error fields so that
+// a second call does not repeat them.
+func apiStateHandler(c *gin.Context) {
+	globalDataOutputLock.Lock()
+	snapshot := gin.H{
+		"faults":       globalFaults,
+		"connected":    globalConnected,
+		"ecuType":      globalEcuType,
+		"userCommand":  globalUserCommand,
+		"alert":        globalAlert,
+		"error":        globalError,
+		"ecuData":      globalDataOutput,
+		"agentVersion": globalAgentVersion,
+	}
+	globalAlert = ""
+	globalError = ""
+	globalDataOutputLock.Unlock()
+
+	c.JSON(200, snapshot)
+}
+
+// apiPortsHandler returns the list of discovered serial ports and which one is selected.
+func apiPortsHandler(c *gin.Context) {
+	globalDataOutputLock.RLock()
+	ports := globalSerialPorts
+	selected := globalSelectedSerialPort
+	globalDataOutputLock.RUnlock()
+
+	c.JSON(200, gin.H{
+		"ports":    ports,
+		"selected": selected,
+	})
+}
+
+// wsHandler upgrades the HTTP connection to a WebSocket and enters the read/write loop.
+func wsHandler(w http.ResponseWriter, r *http.Request) {
 	conn, err := wsupgrader.Upgrade(w, r, nil)
 	if err != nil {
-		logDebug("Failed to set websocket upgrade: %+v", err)
+		logDebug("Failed to upgrade WebSocket connection:", err)
 		return
 	}
 
-	iteration := 0
 	for {
-		// TODO: change to channel read then call function to send?
-		err := wsiteration(conn, iteration)
-		if err != nil {
+		if err := wsIteration(conn); err != nil {
 			break
 		}
-		iteration++
 	}
 }
 
-func wsiteration(conn *websocket.Conn, iteration int) error {
-
-	// wait for a message from the browser (it is sending "." to request data)
-	// message type, msg, err
+// wsIteration handles one request/response cycle on the WebSocket connection.
+// The browser sends "." to request a state snapshot; any other message is treated as a command.
+func wsIteration(conn *websocket.Conn) error {
 	_, message, err := conn.ReadMessage()
 	if err != nil {
-		// fmt.Println("WS readmessage failed")
 		return err
 	}
 
-	var data map[string]interface{} = make(map[string]interface{})
+	var payload map[string]interface{}
 
-	if strings.Compare(string(message), ".") == 0 {
-
-		globalDataOutputLock.RLock()
-		data["faults"] = globalFaults
-		data["connected"] = globalConnected
-		data["ecuType"] = globalEcuType
-		data["userCommand"] = globalUserCommand
-		data["alert"] = globalAlert
-		data["error"] = globalError
-		data["ecuData"] = globalDataOutput
-		data["agentVersion"] = globalAgentVersion
-		data["timestamp"] = time.Now().String()
-		data["serialPorts"] = globalSerialPorts
-		data["selectedSerialPort"] = globalSelectedSerialPort
-		data["logLines"] = globalLogLines
-
-		if globalAlert != "" {
-			globalAlert = ""
+	if strings.TrimSpace(string(message)) == "." {
+		// State request: snapshot everything under lock, then release before encoding
+		globalDataOutputLock.Lock()
+		payload = map[string]interface{}{
+			"faults":             globalFaults,
+			"connected":          globalConnected,
+			"ecuType":            globalEcuType,
+			"userCommand":        globalUserCommand,
+			"alert":              globalAlert,
+			"error":              globalError,
+			"ecuData":            globalDataOutput,
+			"agentVersion":       globalAgentVersion,
+			"timestamp":          time.Now().String(),
+			"serialPorts":        globalSerialPorts,
+			"selectedSerialPort": globalSelectedSerialPort,
+			"logLines":           globalLogLines,
 		}
-		if globalError != "" {
-			globalError = ""
-		}
-		globalDataOutputLock.RUnlock()
-
+		globalAlert = ""
+		globalError = ""
+		globalDataOutputLock.Unlock()
 	} else {
-
-		// must be a command if it wasn't . above
-		log.Printf("recv: %s", message)
-
-		data["command"] = "worked"
+		log.Printf("ws recv: %s", message)
+		payload = map[string]interface{}{"command": "worked"}
 	}
 
-	jsondata, err := json.Marshal(data)
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	fmt.Println(jsondata)
 
-	conn.WriteMessage(websocket.TextMessage, jsondata)
-	return nil
+	return conn.WriteMessage(websocket.TextMessage, jsonData)
 }
