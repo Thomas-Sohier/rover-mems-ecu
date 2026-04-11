@@ -7,9 +7,6 @@ import (
 	"github.com/distributed/sers"
 )
 
-var (
-	ecu1xInitCommand = []byte{0xCA, 0x75, 0xD0}
-)
 
 func readFirstBytesFromPortEcu19(fn string) ([]byte, error) {
 	logDebug("Connecting to MEMS 1.9 ECU")
@@ -28,9 +25,7 @@ func readFirstBytesFromPortEcu19(fn string) ([]byte, error) {
 	sp.SetReadParams(1, 0.5)
 	flushInput(sp)
 
-	sp.SetBreak(false)
-	time.Sleep(500 * time.Millisecond)
-
+	// send5BaudWakeup already handles the idle-high before start bit
 	send5BaudWakeup(sp)
 
 	err = handleWakeUpHandshake(sp)
@@ -38,23 +33,8 @@ func readFirstBytesFromPortEcu19(fn string) ([]byte, error) {
 		return nil, err
 	}
 
-	// Send 1.3/1.6 init sequence
-	logDebug("Sending standard Init (0xCA, 0x75, 0xD0)")
-	sp.SetReadParams(1, 2.0)
-
-	_, err = sp.Write(ecu1xInitCommand)
-	if err != nil {
-		return nil, err
-	}
-
-	// Wait for echo + 4 byte ECU ID
-	ecuID, err := readInitResponse(sp)
-	if err != nil {
-		return nil, err
-	}
-
-	logDebugf("ECU ID: %x", ecuID)
-
+	// Hand off to the standard 1.x loop which sends CA/75/D0 and enters data mode
+	sp.SetReadParams(0, 0.001)
 	return ecu1xLoop(sp, true)
 }
 
@@ -77,14 +57,15 @@ func handleWakeUpHandshake(sp sers.SerialPort) error {
 				buffer = buffer[1:]
 			}
 
-			// Check for wake response: 55 76 83
-			if len(buffer) >= 3 && buffer[0] == 0x55 && buffer[1] == 0x76 && buffer[2] == 0x83 {
-				logDebug("1.9 ECU Woke Response received (55 76 83)")
+			// Check for wake response: sync byte 0x55 followed by any two keyword bytes (ISO 9141)
+			if len(buffer) >= 3 && buffer[0] == 0x55 {
+				kw1, kw2 := buffer[1], buffer[2]
+				logDebugf("1.9 ECU Woke Response received (55 %02X %02X)", kw1, kw2)
 
 				time.Sleep(25 * time.Millisecond)
 
-				// Send inverted second byte (0x83 ^ 0xFF = 0x7C)
-				challengeResponse := buffer[2] ^ 0xFF
+				// Send inverted KW2 (complement of the second keyword byte)
+				challengeResponse := kw2 ^ 0xFF
 				logDebugf("Sending Challenge Response: 0x%02X", challengeResponse)
 				_, err = sp.Write([]byte{challengeResponse})
 				if err != nil {
@@ -96,7 +77,7 @@ func handleWakeUpHandshake(sp sers.SerialPort) error {
 			}
 		}
 	}
-	return errors.New("timeout waiting for 55 76 83")
+	return errors.New("timeout waiting for ISO 9141 wakeup response (55 KW1 KW2)")
 }
 
 func waitForChallengeEcho(sp sers.SerialPort, expectedEcho byte) error {
@@ -112,9 +93,14 @@ func waitForChallengeEcho(sp sers.SerialPort, expectedEcho byte) error {
 		if n > 0 {
 			buffer = append(buffer, tmp[:n]...)
 
-			// Wait for echo + 0xE9
+			// Some K-line interfaces echo our own transmitted byte back; others suppress it.
+			// Accept [expectedEcho, 0xE9] (with echo) or [0xE9] alone (without echo).
 			if len(buffer) >= 2 && buffer[0] == expectedEcho && buffer[1] == 0xE9 {
-				logDebug("1.9 ECU init handshake complete")
+				logDebug("1.9 ECU init handshake complete (echo suppressed: no)")
+				return nil
+			}
+			if len(buffer) >= 1 && buffer[0] == 0xE9 {
+				logDebug("1.9 ECU init handshake complete (echo suppressed: yes)")
 				return nil
 			}
 		}
@@ -122,32 +108,6 @@ func waitForChallengeEcho(sp sers.SerialPort, expectedEcho byte) error {
 	return errors.New("timeout waiting for challenge echo")
 }
 
-func readInitResponse(sp sers.SerialPort) ([]byte, error) {
-	buffer := make([]byte, 0)
-	tmp := make([]byte, 128)
-	expectedLength := 7 // 0xCA, 0x75, 0xD0 + 4 bytes ECU ID
-
-	start := time.Now()
-	for time.Since(start) < 2000*time.Millisecond {
-		n, err := sp.Read(tmp)
-		if err != nil {
-			return nil, err
-		}
-		if n > 0 {
-			buffer = append(buffer, tmp[:n]...)
-
-			if len(buffer) >= expectedLength {
-				// Verify echo
-				if buffer[0] != 0xCA || buffer[1] != 0x75 || buffer[2] != 0xD0 {
-					return nil, errors.New("invalid init response echo")
-				}
-				// Return 4-byte ECU ID
-				return buffer[3:7], nil
-			}
-		}
-	}
-	return nil, errors.New("timeout reading init response")
-}
 
 func flushInput(sp sers.SerialPort) {
 	buf := make([]byte, 1024)
@@ -160,15 +120,7 @@ func flushInput(sp sers.SerialPort) {
 }
 
 func send5BaudWakeup(sp sers.SerialPort) {
-	buffer := make([]byte, 128)
-	for {
-		n, _ := sp.Read(buffer)
-		if n == 0 {
-			break
-		}
-	}
-
-	// Idle High
+	// Idle High before start bit (>= 300ms required by ISO 9141)
 	sp.SetBreak(false)
 	time.Sleep(500 * time.Millisecond)
 
