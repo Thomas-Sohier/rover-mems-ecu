@@ -83,6 +83,13 @@ func initializeAgent() {
 func setupGracefulShutdown() chan os.Signal {
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+	
+	go func() {
+		<-stopChan
+		fmt.Println("\nShutting down immediately due to OS signal...")
+		os.Exit(0)
+	}()
+	
 	return stopChan
 }
 

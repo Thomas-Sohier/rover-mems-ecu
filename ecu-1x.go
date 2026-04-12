@@ -30,10 +30,8 @@ func readFirstBytesFromPortEcu1x(fn string) ([]byte, error) {
 		return nil, err
 	}
 
-	// mode, err := sp.GetMode()
-	// fmt.Println("Serial cable set to:")
-	// fmt.Println(mode)
-
+	mode, err := sp.GetMode()
+	logDebug("Serial cable set to:")
+	logDebug(mode)
 	return ecu1xLoop(sp, true)
-
 }

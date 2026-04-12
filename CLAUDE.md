@@ -23,7 +23,7 @@ There are no tests in this repository.
 | Flag | Values | Description |
 |------|--------|-------------|
 | `-serialport` | e.g. `/dev/ttyUSB0` | Serial port to use (auto-detected if omitted) |
-| `-ecutype` | `1.x`, `1.9`, `2J`, `rc5`, `3` | ECU variant |
+| `-ecutype` | `1.x`, `1.9`, `2J`, `rc5`, `3`, `fake` | ECU variant |
 | `-mode` | `prod` (default), `debug` | Enables verbose byte-level logging |
 
 ## Architecture
