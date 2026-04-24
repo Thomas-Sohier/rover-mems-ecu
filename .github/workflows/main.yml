@@ -25,7 +25,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -o rover-mems-${{ matrix.goos }}-${{ matrix.goarch }} ./...
+          go build -o rover-mems-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/rover-mems
 
       - name: Zip exes
         run: |
