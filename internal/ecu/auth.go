@@ -1,4 +1,4 @@
-package main
+package ecu
 
 
 
@@ -7,7 +7,8 @@ func bit(bit_num int, thebyte int) int {
   return (thebyte >> bit_num) & 1;
 }
 
-func generateKey(seed int) int {
+// GenerateKey computes the key response for MEMS 3 ECU authentication.
+func GenerateKey(seed int) int {
   key := 0
   loops := 1
 

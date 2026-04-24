@@ -1,185 +1,138 @@
-package main
+package mems3
 
 import (
-	"fmt"
-	"time"
-	"errors"
 	"encoding/hex"
-	"github.com/distributed/sers"
+	"errors"
+	"fmt"
 	"strconv"
+	"time"
+
+	"rover-mems-agent/internal/ecu"
+
+	"github.com/distributed/sers"
 )
+
+func init() {
+	ecu.Register("3", NewMEMS3)
+}
 
 var (
-	ecu3RequestHeader = []byte {0xB8, 0x13, 0xF7}
+	requestHeader = []byte{0xB8, 0x13, 0xF7}
 
-	ecu3InitCommand = []byte {0x1A, 0x9A}
-	ecu3InitAccepted = []byte {0x5A, 0x9A}
+	initCommand       = []byte{0x1A, 0x9A}
+	initAccepted      = []byte{0x5A, 0x9A}
+	startDiagnostic   = []byte{0x10, 0xA0}
+	startDiagResponse = []byte{0x50}
+	requestSeed       = []byte{0x27, 0x01}
+	seedResponse      = []byte{0x67, 0x01}
+	sendKey           = []byte{0x27, 0x02}
+	keyAcceptResponse = []byte{0x67, 0x02}
+	pingCommand       = []byte{0x3E}
+	pongResponse      = []byte{0x7E}
 
-	ecu3StartDiagnostic = []byte {0x10, 0xA0}
-	ecu3StartDiagResponse = []byte {0x50}
+	clearFaultsCommand    = []byte{0x14, 0x00, 0x00}
+	faultsClearedResponse = []byte{0x54, 0x00, 0x00}
+	requestFaultsCommand  = []byte{0x18, 0x0, 0x0, 0x0}
+	responseFaults        = []byte{0x58}
 
-	ecu3RequestSeed = []byte {0x27, 0x01}
-	ecu3SeedResponse = []byte {0x67, 0x01}
-	ecu3Seed = 0
+	requestData00  = []byte{0x21, 0x00}
+	requestData06  = []byte{0x21, 0x06}
+	requestData0A  = []byte{0x21, 0x0A}
+	requestData0B  = []byte{0x21, 0x0B}
+	requestData21  = []byte{0x21, 0x21}
+	responseData00 = []byte{0x61, 0x00}
+	responseData06 = []byte{0x61, 0x06}
+	responseData0A = []byte{0x61, 0x0A}
+	responseData0B = []byte{0x61, 0x0B}
+	responseData21 = []byte{0x61, 0x21}
 
-	ecu3SendKey = []byte {0x27, 0x02}
-	ecu3KeyAcceptResponse = []byte {0x67, 0x02}
-	ecu3Key = 0
-
-	ecu3PingCommand = []byte {0x3E}
-	ecu3PongResponse = []byte {0x7E}
-
-	ecu3ClearFaultsCommand = []byte {0x14, 0x00, 0x00}
-	ecu3FaultsClearedResponse = []byte {0x54, 0x00, 0x00}
-
-	ecu3RequestFaultsCommand = []byte {0x18, 0x0, 0x0, 0x0}
-	ecu3ResponseFaults = []byte {0x58}
-
-	ecu3RequestData00 = []byte {0x21, 0x00}
-	ecu3RequestData06 = []byte {0x21, 0x06}
-	ecu3RequestData0A = []byte {0x21, 0x0A}
-	ecu3RequestData0B = []byte {0x21, 0x0B}
-	ecu3RequestData21 = []byte {0x21, 0x21}
-
-	ecu3ResponseData00 = []byte {0x61, 0x00}
-	ecu3ResponseData06 = []byte {0x61, 0x06}
-	ecu3ResponseData0A = []byte {0x61, 0x0A}
-	ecu3ResponseData0B = []byte {0x61, 0x0B}
-	ecu3ResponseData21 = []byte {0x61, 0x21}
-
-	ecu3UserCommands = map[string] []byte{
-		"clearfaults": ecu3ClearFaultsCommand,
+	userCommands = map[string][]byte{
+		"clearfaults": clearFaultsCommand,
 	}
 
-
-  ecu3FaultTypes = map[int]string {
-    0x20: "historical",
-    0x74: "present, test not complete",
-    0x30: "historical, test not complete",
-    0x58: "present, test not complete",
-    0x61: "present",
-    0x62: "present",
-    0x64: "present",
-    0x71: "present, test not complete",
-  }
-  ecu3Faults = map[int]string {
-    0x1232: "fuel pump relay, open circuit",
-    0x0650: "MIL control circuit malfunction",
-    0x0481: "A/C condensor fan",
-    0x1508: "IACV driver open circuit",
-    0x1186: "front lambda heater",
-    0x1185: "front lambda heater",
-    0x1192: "rear lambda heater",
-    0x0445: "purge valve drive",
-    0x0480: "cooling fan",
-    0x1610: "main relay - open circuit",
-    0x0113: "IAT shorted",
-    0x0118: "coolant temp sensor shorted",
-    0x0122: "throttle pot shorted",
-    0x0562: "system voltage malfunction",
-    0x0197: "oil temp sensor shorted",
-    0x0462: "fuel tank level sensor shorted to ground",
-    0x0340: "cam position sensor",
-    0x0106: "manifold pressure - incorrect reading",
-    0x1316: "misfire causing excess emissions",
-    0x0170: "fuel system",
-    0x0655: "warning lamp - engine bay temperature - open circuit",
-  }
-
+	faultTypes = map[int]string{
+		0x20: "historical",
+		0x74: "present, test not complete",
+		0x30: "historical, test not complete",
+		0x58: "present, test not complete",
+		0x61: "present",
+		0x62: "present",
+		0x64: "present",
+		0x71: "present, test not complete",
+	}
+	faults = map[int]string{
+		0x1232: "fuel pump relay, open circuit",
+		0x0650: "MIL control circuit malfunction",
+		0x0481: "A/C condensor fan",
+		0x1508: "IACV driver open circuit",
+		0x1186: "front lambda heater",
+		0x1185: "front lambda heater",
+		0x1192: "rear lambda heater",
+		0x0445: "purge valve drive",
+		0x0480: "cooling fan",
+		0x1610: "main relay - open circuit",
+		0x0113: "IAT shorted",
+		0x0118: "coolant temp sensor shorted",
+		0x0122: "throttle pot shorted",
+		0x0562: "system voltage malfunction",
+		0x0197: "oil temp sensor shorted",
+		0x0462: "fuel tank level sensor shorted to ground",
+		0x0340: "cam position sensor",
+		0x0106: "manifold pressure - incorrect reading",
+		0x1316: "misfire causing excess emissions",
+		0x0170: "fuel system",
+		0x0655: "warning lamp - engine bay temperature - open circuit",
+	}
 )
 
-
-func ecu3SendNextCommand(sp sers.SerialPort, previousResponse []byte) {
-	if globalUserCommand != "" {
-		command, ok := ecu3UserCommands[globalUserCommand];
-		if ok {
-			globalUserCommand = ""
-			ecu3SendCommand(sp, command)
-			return
-		} else {
-			fmt.Println("Asked to perform a user command but don't understand it")
-		}
-	}
-
-	if slicesEqual(previousResponse, ecu3InitAccepted) {
-		ecu3SendCommand(sp, ecu3StartDiagnostic)
-
-	} else if slicesEqual(previousResponse, ecu3StartDiagResponse) {
-		ecu3SendCommand(sp, ecu3RequestSeed)
-
-  } else if slicesEqual(previousResponse, ecu3SeedResponse) {
-		command := append(ecu3SendKey, byte(ecu3Key >> 8))
-		command = append(command, byte(ecu3Key & 0xFF))
-		ecu3SendCommand(sp, command)
-
-	} else if slicesEqual(previousResponse, ecu3KeyAcceptResponse) {
-		ecu3SendCommand(sp, ecu3PingCommand)
-
-   } else if slicesEqual(previousResponse, ecu3PongResponse) {
-		ecu3SendCommand(sp, ecu3RequestFaultsCommand)
-
-	} else if slicesEqual(previousResponse, ecu3ResponseFaults) { ecu3SendCommand(sp, ecu3RequestData00)
-	} else if slicesEqual(previousResponse, ecu3ResponseData00) { ecu3SendCommand(sp, ecu3RequestData06)
-	} else if slicesEqual(previousResponse, ecu3ResponseData06) { ecu3SendCommand(sp, ecu3RequestData0A)
-	} else if slicesEqual(previousResponse, ecu3ResponseData0A) { ecu3SendCommand(sp, ecu3RequestData0B)
-	} else if slicesEqual(previousResponse, ecu3ResponseData0B) { ecu3SendCommand(sp, ecu3RequestData21)
-	} else if slicesEqual(previousResponse, ecu3ResponseData21) { ecu3SendCommand(sp, ecu3PingCommand)
-
-	} else if slicesEqual(previousResponse, ecu3FaultsClearedResponse) {
-		ecu3SendCommand(sp, ecu3RequestFaultsCommand)
-		globalAlert = "ECU reports faults cleared"
-
-	} else { // fall back to ping
-		ecu3SendCommand(sp, ecu3PingCommand)
-	}
-//
+// MEMS3 handles MEMS 3 ECUs.
+type MEMS3 struct {
+	state *ecu.State
+	sp    sers.SerialPort
+	seed  int
+	key   int
 }
 
-func ecu3SendCommand(sp sers.SerialPort, data []byte) {
-  output := ecu3RequestHeader // []byte {0xB8, 0x13, 0xF7} // always
-	output = append(output, byte(len(data)))
-	output = append(output, data...)
-  output = append(output, xor_all_bytes(output))
-	sp.Write(output)
-	// fmt.Println("> command sent")
+// NewMEMS3 creates a new MEMS 3 ECU handler.
+func NewMEMS3(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
+	state.DebugMode = cfg.DebugMode
+	return &MEMS3{state: state}, nil
 }
 
-
-func readFirstBytesFromPortEcu3(fn string) ([]byte, error) {
-
+func (m *MEMS3) Connect(portName string) error {
 	fmt.Println("Connecting to MEMS 3 ECU")
-	globalConnected = false
+	m.state.Lock()
+	m.state.Connected = false
+	m.state.Unlock()
 
-	sp, err := sers.Open(fn)
+	sp, err := sers.Open(portName)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer sp.Close()
+	m.sp = sp
 
 	err = sp.SetMode(9600, 8, sers.E, 1, sers.NO_HANDSHAKE)
 	if err != nil {
-		return nil, err
+		sp.Close()
+		return err
 	}
 
-	// setting:
-	// minread = 0: minimal buffering on read, return characters as early as possible
-	// timeout = 1.0: time out if after 1.0 seconds nothing is received
 	err = sp.SetReadParams(0, 0.001)
 	if err != nil {
-		return nil, err
+		sp.Close()
+		return err
 	}
 
-	// this displays the parity incorrectly so stop printing it
-	// mode, err := sp.GetMode()
-	// fmt.Println("Serial cable set to:")
-	// fmt.Println(mode)
+	return nil
+}
 
-	ecu3SendCommand(sp, ecu3InitCommand)
+func (m *MEMS3) ReadData() error {
+	m.sendCommand(initCommand)
 
 	buffer := make([]byte, 0)
-
 	readLoops := 0
 	readLoopsLimit := 200
+
 	for readLoops < readLoopsLimit {
 		readLoops++
 		if readLoops > 1 {
@@ -187,312 +140,324 @@ func readFirstBytesFromPortEcu3(fn string) ([]byte, error) {
 		}
 
 		rb := make([]byte, 128)
-		n, _ := sp.Read(rb[:])
-		rb = rb[0:n] // chop down to actual data size
+		n, _ := m.sp.Read(rb[:])
+		rb = rb[0:n]
 		buffer = append(buffer, rb...)
 		if n > 0 {
-			readLoops = 0 // reset timeout
+			readLoops = 0
 		}
 
-		if len(buffer) == 0 { continue }
+		if len(buffer) == 0 {
+			continue
+		}
 
-		// check for init echo
-		if len(buffer) >= 2 && slicesEqual(buffer[0:2], ecu3InitCommand) {
+		if len(buffer) >= 2 && slicesEqual(buffer[0:2], initCommand) {
 			fmt.Println("Got our init echo")
 			buffer = buffer[2:]
 			continue
 		}
 
-		// check for full commands - our echos and responses too
-		// [always 3 byte header] [data length] [data...] [checksum]
-
-		if len(buffer) < 4 { continue } // no length byte yet
+		if len(buffer) < 4 {
+			continue
+		}
 		dataLength := int(buffer[3])
 		totalLength := 3 + 1 + dataLength + 1
-		if len(buffer) < totalLength { continue } // have length byte but not whole packet yet
+		if len(buffer) < totalLength {
+			continue
+		}
 
-		// TODO: check checksum ?
+		actualData := buffer[4 : 4+dataLength]
 
-		// thisPacket := buffer[0:totalLength]
-		actualData := buffer[4:4+dataLength]
-
-		// our echos
-		if slicesEqual(buffer[0:3], ecu3RequestHeader) {
-			// fmt.Println("This looks like our own echo")
-
-			if slicesEqual(actualData, ecu3InitCommand) {
-				// fmt.Println("Got our init echo")
+		if slicesEqual(buffer[0:3], requestHeader) {
+			if slicesEqual(actualData, initCommand) ||
+				slicesEqual(actualData, startDiagnostic) ||
+				slicesEqual(actualData, requestSeed) ||
+				(len(actualData) >= 2 && slicesEqual(actualData[0:2], sendKey)) ||
+				slicesEqual(actualData, pingCommand) {
 				buffer = buffer[totalLength:]
 				continue
 			}
-			if slicesEqual(actualData, ecu3StartDiagnostic) {
-				// fmt.Println("Got our start diag echo")
-				buffer = buffer[totalLength:]
-				continue
-			}
-			if slicesEqual(actualData, ecu3RequestSeed) {
-				// fmt.Println("Got our seed req echo")
-				buffer = buffer[totalLength:]
-				continue
-			}
-			if slicesEqual(actualData[0:2], ecu3SendKey) {
-				// fmt.Println("Got our key send echo")
-				buffer = buffer[totalLength:]
-				// buffer = buffer[(len(ecu3SendKey)+2+2):] // extra 2 for key
-				continue
-			}
-			if slicesEqual(actualData, ecu3PingCommand) {
-				// fmt.Println("Got our ping echo")
-				buffer = buffer[totalLength:]
-				continue
-			}
-
-			// echo not caught if we end up here
-			// don't really care, if it's obviously our echo then it's fine
-			// fmt.Println("*** Unknown echo caught here")
-			// fmt.Printf("buffer: got %d bytes \n%s", len(buffer), hex.Dump(buffer))
 			buffer = buffer[totalLength:]
 			continue
+		}
 
-		} // end of our echos
+		m.state.Lock()
 
-		//
-		// actual responses
-		globalDataOutputLock.Lock()
-		//
-		if slicesEqual(actualData[0:2], ecu3InitAccepted) {
+		if len(actualData) >= 2 && slicesEqual(actualData[0:2], initAccepted) {
 			fmt.Println("< ECU woke up")
 			buffer = nil
-			globalConnected = true
+			m.state.Connected = true
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3InitAccepted)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(initAccepted)
 			continue
 		}
-		if slicesEqual(actualData, ecu3StartDiagResponse) {
+		if slicesEqual(actualData, startDiagResponse) {
 			fmt.Println("< Diag mode accepted")
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3StartDiagResponse)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(startDiagResponse)
 			continue
 		}
-		if slicesEqual(actualData[0:2], ecu3SeedResponse) {
+		if len(actualData) >= 2 && slicesEqual(actualData[0:2], seedResponse) {
 			fmt.Println("< seed ")
-			ecu3Seed = int(actualData[2]) << 8
-			ecu3Seed += int(actualData[3])
-			fmt.Println(ecu3Seed)
-			if ecu3Seed == 0 { // auth not required/already done
-				ecu3Key = 0
+			m.seed = int(actualData[2]) << 8
+			m.seed += int(actualData[3])
+			fmt.Println(m.seed)
+			if m.seed == 0 {
+				m.key = 0
 				buffer = nil
+				m.state.Unlock()
 				time.Sleep(50 * time.Millisecond)
-				ecu3SendNextCommand(sp, nil)
-				globalDataOutputLock.Unlock()
+				m.sendNextCommand(nil)
 				fmt.Println("Auth not required, collecting data...")
 				continue
 			} else {
-				// do key generation
-				ecu3Key = generateKey(ecu3Seed)
+				m.key = ecu.GenerateKey(m.seed)
 				buffer = nil
+				m.state.Unlock()
 				time.Sleep(50 * time.Millisecond)
-				ecu3SendNextCommand(sp, ecu3SeedResponse)
-				globalDataOutputLock.Unlock()
+				m.sendNextCommand(seedResponse)
 				continue
 			}
-
 		}
-		if slicesEqual(actualData, ecu3KeyAcceptResponse) {
+		if slicesEqual(actualData, keyAcceptResponse) {
 			fmt.Println("< Key accepted, collecting data...")
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3KeyAcceptResponse)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(keyAcceptResponse)
 			continue
 		}
-		if slicesEqual(actualData, ecu3PongResponse) {
-			// fmt.Println("< PONG")
+		if slicesEqual(actualData, pongResponse) {
 			fmt.Print(".")
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3PongResponse)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(pongResponse)
 			continue
 		}
-		if slicesEqual(actualData, ecu3FaultsClearedResponse) {
+		if slicesEqual(actualData, faultsClearedResponse) {
 			fmt.Println("< FAULTS CLEARED")
-			globalAlert = "ECU reports faults cleared"
+			m.state.Alert = "ECU reports faults cleared"
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3FaultsClearedResponse)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(faultsClearedResponse)
 			continue
 		}
 
-		if slicesEqual(actualData[0:len(ecu3ResponseFaults)], ecu3ResponseFaults) {
-			// fmt.Println("< Faults")
-			ecu3ParseFaults(actualData)
+		if len(actualData) >= len(responseFaults) && slicesEqual(actualData[0:len(responseFaults)], responseFaults) {
+			m.parseFaults(actualData)
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3ResponseFaults)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(responseFaults)
 			continue
 		}
 
-		if slicesEqual(actualData[0:2], ecu3ResponseData00) {
-			// fmt.Println("got data packet 00")
-			coolant_temp := int(actualData[2]) << 8;
-			coolant_temp += int(actualData[3]);
-			coolant_temp -= 2730;
-			globalDataOutput["coolant_temp"] = float32(coolant_temp) / 10
-			// 4,5    0xA, 0xAA, # coolant temp input signal (same scale?)
-			oil_temp := int(actualData[6]) << 8;
-			oil_temp += int(actualData[7]);
-			oil_temp -= 2730;
-			globalDataOutput["oil_temp"] = float32(oil_temp) / 10
-			// 8,9    0xA, 0xAA, # ditto input signal
-			intake_air_temp := int(actualData[10]) << 8;
-			intake_air_temp += int(actualData[11]);
-			intake_air_temp -= 2730;
-			globalDataOutput["intake_air_temp"] = float32(intake_air_temp) / 10
-
+		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData00) {
+			coolantTemp := int(actualData[2])<<8 + int(actualData[3]) - 2730
+			m.state.Data["coolant_temp"] = float32(coolantTemp) / 10
+			oilTemp := int(actualData[6])<<8 + int(actualData[7]) - 2730
+			m.state.Data["oil_temp"] = float32(oilTemp) / 10
+			intakeAirTemp := int(actualData[10])<<8 + int(actualData[11]) - 2730
+			m.state.Data["intake_air_temp"] = float32(intakeAirTemp) / 10
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3ResponseData00)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(responseData00)
 			continue
 		}
-		if slicesEqual(actualData[0:2], ecu3ResponseData06) {
-			// fmt.Println("got data packet 06")
-			mapKpa := actualData[2] << 8;
-      mapKpa += actualData[3];
-			globalDataOutput["map_sensor_kpa"] = float32(mapKpa) / 100
-      // map_input_signal = actualData[4] << 8;
-      // map_input_signal += actualData[5];
-      // map_input_signal /= 100;
-
-      throttleMv := actualData[8] << 8;
-      throttleMv += actualData[9];
-			globalDataOutput["throttle_mv"] = float32(throttleMv)
-
-      rpm := int(actualData[10]) << 8;
-      rpm += int(actualData[11]);
-			globalDataOutput["rpm"] = float32(rpm)
-
+		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData06) {
+			mapKpa := int(actualData[2])<<8 + int(actualData[3])
+			m.state.Data["map_sensor_kpa"] = float32(mapKpa) / 100
+			throttleMv := int(actualData[8])<<8 + int(actualData[9])
+			m.state.Data["throttle_mv"] = float32(throttleMv)
+			rpm := int(actualData[10])<<8 + int(actualData[11])
+			m.state.Data["rpm"] = float32(rpm)
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3ResponseData06)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(responseData06)
 			continue
 		}
-		if slicesEqual(actualData[0:2], ecu3ResponseData0A) {
-			// fmt.Println("got data packet 0A")
-			fuel_feedback := actualData[2] << 8;
-      fuel_feedback += actualData[3];
-			globalDataOutput["fuel_feedback_percent"] = float32(fuel_feedback) / 100
-
-      pre_lambda_mv := actualData[4] << 8;
-      pre_lambda_mv += actualData[5];
-			globalDataOutput["lambda_mv"] = float32(pre_lambda_mv)
-      /*
-      TODO: rear/secondary lambda
-      send_command([0x61, 0xa,
-          0x27, 0x10, # a/f regulation/feedback /100 (%)
-          0x0, 0xda, # front/pre cat lambda mv
-          0x0, 0xe3, # ditto input signal
-          0x27, 0x10, # bank 2 a/f regulation?
-          0x1, 0xda, # rear/post cat lambda mv
-          0x1, 0xe3, # ditto input signal
-          0x0, 0x0
-      ])
-      */
+		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData0A) {
+			fuelFeedback := int(actualData[2])<<8 + int(actualData[3])
+			m.state.Data["fuel_feedback_percent"] = float32(fuelFeedback) / 100
+			preLambdaMv := int(actualData[4])<<8 + int(actualData[5])
+			m.state.Data["lambda_mv"] = float32(preLambdaMv)
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3ResponseData0A)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(responseData0A)
 			continue
 		}
-		if slicesEqual(actualData[0:2], ecu3ResponseData0B) {
-			// fmt.Println("got data packet 0B")
-			coil1 := actualData[2] << 8;
-      coil1 += actualData[3];
-			globalDataOutput["coil_1_time_uS"] = float32(coil1)
-      coil2 := actualData[4] << 8;
-      coil2 += actualData[5];
-			globalDataOutput["coil_2_time_uS"] = float32(coil2)
+		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData0B) {
+			coil1 := int(actualData[2])<<8 + int(actualData[3])
+			m.state.Data["coil_1_time_uS"] = float32(coil1)
+			coil2 := int(actualData[4])<<8 + int(actualData[5])
+			m.state.Data["coil_2_time_uS"] = float32(coil2)
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3ResponseData0B)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(responseData0B)
 			continue
 		}
-		if slicesEqual(actualData[0:2], ecu3ResponseData21) {
-			// fmt.Println("got data packet 21")
-			rpmdev := actualData[2] << 8;
-      rpmdev += actualData[3];
-      globalDataOutput["rpm_deviation"] = float32(rpmdev)
+		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData21) {
+			rpmdev := int(actualData[2])<<8 + int(actualData[3])
+			m.state.Data["rpm_deviation"] = float32(rpmdev)
 			buffer = nil
+			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
-			ecu3SendNextCommand(sp, ecu3ResponseData21)
-			globalDataOutputLock.Unlock()
+			m.sendNextCommand(responseData21)
 			continue
 		}
-
-		// if we get here then something is wrong with the data
-
-		// todo: cope with 7F (fail/no)
-
-		// fmt.Printf("unknown command in buffer (burning it): got %d bytes \n%s", len(buffer), hex.Dump(buffer))
-		// buffer = nil
-		// ecu3SendNextCommand(sp, ecu3PongResponse)
 
 		fmt.Printf("unknown command in buffer (burning it): got %d bytes \n%s", len(buffer), hex.Dump(buffer[0:totalLength]))
 		fmt.Printf("actualData %d bytes \n%s", len(actualData), hex.Dump(actualData))
 		buffer = buffer[totalLength:]
-
-		globalDataOutputLock.Unlock()
-
+		m.state.Unlock()
 	}
+
 	if readLoops >= readLoopsLimit {
 		fmt.Printf("had buffer data: got %d bytes \n%s", len(buffer), hex.Dump(buffer))
-		return nil, errors.New("MEMS 3 timed out")
+		return errors.New("MEMS 3 timed out")
 	}
 	fmt.Println("fell out of readloop")
-
-	return nil, err
+	return nil
 }
 
-func ecu3ParseFaults(buffer []byte) {
-	// fmt.Printf("ecu3ParseFaults got %d bytes \n%s", len(buffer), hex.Dump(buffer))
+func (m *MEMS3) sendNextCommand(previousResponse []byte) {
+	m.state.Lock()
+	cmd := m.state.UserCommand
+	m.state.Unlock()
 
-	faults := []string {}
+	if cmd != "" {
+		command, ok := userCommands[cmd]
+		if ok {
+			m.state.Lock()
+			m.state.UserCommand = ""
+			m.state.Unlock()
+			m.sendCommand(command)
+			return
+		} else {
+			fmt.Println("Asked to perform a user command but don't understand it")
+		}
+	}
 
-  buffer = buffer[2:] // throw away command
-  for len(buffer) >= 3 {
-    thisfault := int(buffer[0]) << 8
-    thisfault += int(buffer[1])
+	if slicesEqual(previousResponse, initAccepted) {
+		m.sendCommand(startDiagnostic)
+	} else if slicesEqual(previousResponse, startDiagResponse) {
+		m.sendCommand(requestSeed)
+	} else if slicesEqual(previousResponse, seedResponse) {
+		command := append(sendKey, byte(m.key>>8))
+		command = append(command, byte(m.key&0xFF))
+		m.sendCommand(command)
+	} else if slicesEqual(previousResponse, keyAcceptResponse) {
+		m.sendCommand(pingCommand)
+	} else if slicesEqual(previousResponse, pongResponse) {
+		m.sendCommand(requestFaultsCommand)
+	} else if slicesEqual(previousResponse, responseFaults) {
+		m.sendCommand(requestData00)
+	} else if slicesEqual(previousResponse, responseData00) {
+		m.sendCommand(requestData06)
+	} else if slicesEqual(previousResponse, responseData06) {
+		m.sendCommand(requestData0A)
+	} else if slicesEqual(previousResponse, responseData0A) {
+		m.sendCommand(requestData0B)
+	} else if slicesEqual(previousResponse, responseData0B) {
+		m.sendCommand(requestData21)
+	} else if slicesEqual(previousResponse, responseData21) {
+		m.sendCommand(pingCommand)
+	} else if slicesEqual(previousResponse, faultsClearedResponse) {
+		m.sendCommand(requestFaultsCommand)
+	} else {
+		m.sendCommand(pingCommand)
+	}
+}
 
-    faulttype := int(buffer[2])
+func (m *MEMS3) sendCommand(data []byte) {
+	output := requestHeader
+	output = append(output, byte(len(data)))
+	output = append(output, data...)
+	output = append(output, xorAllBytes(output))
+	m.sp.Write(output)
+}
 
-		output_fault_type, ok := ecu3FaultTypes[int(faulttype)];
+func (m *MEMS3) parseFaults(buffer []byte) {
+	faultList := []string{}
+	buffer = buffer[2:]
+	for len(buffer) >= 3 {
+		thisFault := int(buffer[0])<<8 + int(buffer[1])
+		faultType := int(buffer[2])
+
+		outputFaultType, ok := faultTypes[faultType]
 		if !ok {
-			output_fault_type = "unknown ("+strconv.Itoa(int(faulttype))+")"
+			outputFaultType = "unknown (" + strconv.Itoa(faultType) + ")"
 		}
 
-    output_fault, ok := ecu3Faults[int(thisfault)]
+		outputFault, ok := faults[thisFault]
 		if !ok {
-			output_fault = "unknown ("+strconv.Itoa(int(thisfault))+")"
+			outputFault = "unknown (" + strconv.Itoa(thisFault) + ")"
 		}
 
-    full_output_text := "Fault - "+output_fault+" - "+output_fault_type
+		fullOutputText := "Fault - " + outputFault + " - " + outputFaultType
+		faultList = append(faultList, fullOutputText)
 
-		faults = append(faults, full_output_text)
+		if len(buffer) > 3 {
+			buffer = buffer[3:]
+		} else {
+			buffer = nil
+		}
+	}
+	m.state.Faults = faultList
+}
 
-    if len(buffer) > 3 {
-      buffer = buffer[3:]
-    } else {
-      buffer = nil
-    }
-  }
+func (m *MEMS3) GetFaults() []string {
+	m.state.RLock()
+	defer m.state.RUnlock()
+	return m.state.Faults
+}
 
-	globalFaults = faults
+func (m *MEMS3) SendCommand(cmd string) error {
+	m.state.Lock()
+	m.state.UserCommand = cmd
+	m.state.Unlock()
+	return nil
+}
+
+func (m *MEMS3) Close() error {
+	m.state.Lock()
+	m.state.Connected = false
+	m.state.Unlock()
+	if m.sp != nil {
+		return m.sp.Close()
+	}
+	return nil
+}
+
+func (m *MEMS3) Type() string {
+	return "3"
+}
+
+func slicesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func xorAllBytes(data []byte) byte {
+	result := byte(0)
+	for _, b := range data {
+		result ^= b
+	}
+	return result
 }

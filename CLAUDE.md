@@ -28,6 +28,48 @@ There are no tests in this repository.
 
 ## Architecture
 
+
+```text
+/ (racine du projet)
+├── cmd/
+│   └── rover-mems/            # Entrypoint
+│       └── main.go            # Init app, read config, launch server and series port.
+│
+├── internal/                  
+│   ├── ecu/                   # ECU 
+│   │   ├── ecu.go             # Common INTERFACE for every ECU
+│   │   ├── auth.go           
+│   │   ├── fake/              # Fake for test purpose
+│   │   ├── mems1x/            # shared MEMS 1.X
+│   │   ├── mems2j/            # MEMS 2J
+│   │   ├── mems3/             # MEMS 3
+│   │   └── mems19/            # MEMS 1.9
+│   │
+│   ├── serial/                # Gestion matérielle des ports séries
+│   │   ├── serial.go          
+│   │   ├── ports_linux.go     # GO automatically use _linux
+│   │   └── ports_windows.go   # GO automatically use _windows
+│   │
+│   └── web/                   # API and Websocket
+│       └── server.go          # Implementation
+│
+├── pkg/                       # Shared helpers
+│   └── utils/
+│       └── helpers.go         
+│
+├── ui/                        # front-end
+│   └── dashboard.html         # Always included in //go:embed, but properly placed
+│
+├── scripts/                   # Build and launch file
+│   ├── build_packed.cmd
+│   └── run-32.cmd
+│
+├── go.mod
+├── go.sum
+├── README.md
+└── LICENSE
+```
+
 The agent runs a **main event loop** (`main.go`) that retries `connectLoop()` every second. `connectLoop` picks the serial port, then dispatches to the appropriate ECU handler based on `globalEcuType`. All shared state (`globalDataOutput`, `globalFaults`, `globalConnected`, etc.) is protected by `globalDataOutputLock` (a `sync.RWMutex`).
 
 A **Gin HTTP server** (`webserver.go`) runs concurrently. It exposes:

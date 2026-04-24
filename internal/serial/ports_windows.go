@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package serial
 
 import (
 	"syscall"
@@ -23,7 +23,8 @@ func regEnumValue(key syscall.Handle, index uint32, name *uint16, nameLen *uint3
 }
 
 
-func nativeGetPortsList() ([]string, error) {
+// GetPortsList returns available serial ports on the system.
+func GetPortsList() ([]string, error) {
 	subKey, err := syscall.UTF16PtrFromString("HARDWARE\\DEVICEMAP\\SERIALCOMM\\")
 	if err != nil {
 		return nil, errors.New("ErrorEnumeratingPorts")

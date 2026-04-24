@@ -1,388 +1,418 @@
-package main
-
-// TODO: fix the code to skip over failing 0x21 data reads and go to next instead of restarting
+package mems2j
 
 import (
-	"fmt"
-	"time"
 	"errors"
-	// "encoding/hex"
+	"fmt"
+	"sync"
+	"time"
+
+	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/serial"
+	"rover-mems-agent/pkg/utils"
+
 	"github.com/distributed/sers"
 )
 
-var (
-
-	twojLastSentCommand = []byte {}
-
-	twojInitCommand = []byte {0x81, 0x13, 0xF7, 0x81, 0x0C}
-
-	twojStartDiagnostic = []byte {0x10, 0xA0}
-	/*
-	related/alternates
-	default seems to be 4
-	just 0x82 sets it to 4 or 5
-	0x10 0x80 sets it to 2 or 4
-	0x10 0x90 sets it to 0 or 4
-	0x10 0xa0 sets it to 1 or 4
-	just 0x13 sets it to 3 or 4
-
-	*/
-
-	twojRequestSeed = []byte {0x27, 0x01}
-	twojSendKey = []byte {0x27, 0x02}
-	twojPingCommand = []byte {0x3E}
-
-	twojClearFaultsCommand = []byte {0x31, 0xCB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	twojFaultsClearedResponse = []byte {0x71, 0xCB}
-
-
-	twojLearnImmoCommand = []byte {0x31, 0xD0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00} // doesn't work when it was 31,d1, trying 31d0 now, needs more auth or something
-	twojResponseLearnImmoCommand = []byte {0x71, 0xD0}
-
-	twojRead722Command = []byte {0x23, 0x00, 0x07, 0x22, 0x01}
-
-	// // read a load from the start of the ROM 0x100000
-	// // eventually needs to get to 0x1FFFFF
-	// twojReadRomCommand = []byte {0x23, 0x10, 0x00, 0x00, 32} // 34 bytes might actually be allowed at a time but 32 will be neater blocks
-	// // 4096 reads needed at that size
-	// twojReadRomCommandNextAddress = 0x100000
-	// twojReadRomCommandContinued = []byte {0x23, 0x10, 0x00, 0x00, 32} // used to loop with new addresses
-	// twojReadRomInProgress = false
-	// twojReadRomFilename = "rom-dump.bin"
-	// twojReadRomStartedTime = time.Now().Unix() // placeholder
-
-	twojRequestService13 = []byte {0x13}
-
-	/*
-	serivce 0x30
-	most seem to just set some ram values
-
-	*/
-
-	twojRequestService31_d5 = []byte {0x31, 0xd5} // data from start of cal
-
-
-	// service 0x33 requests - gather secretive data, either done by index or the first value
-	twojRequestService33_d5 = []byte {0x33, 0xd5} // data from 0x1a5 ram
-	twojRequestService33_c0 = []byte {0x33, 0xc0} // data from 0x3e2 - immobiliser status
-	// possibles:
-	// 5 = learn or disabled (0xF0F0)
-	// 3 = code correct
-	// 4 = code wrong
-	// 6 = learn or disabled or pin shorted?  (0x0000 or 0xFFFF)
-	// unknown - 0, 1, 2, 7
-
-	twojRequestService33_c8 = []byte {0x33, 0xc8} // data from 0x514
-	twojRequestService33_d2 = []byte {0x33, 0xd2} // data from 0x4b4
-	twojRequestService33_d4 = []byte {0x33, 0xd4} // data loop - 8 bytes of zeros on the bench?
-	twojRequestService33_da = []byte {0x33, 0xda} // data from 0x4b4 (seems same as d2 code but separate function)
-	twojRequestService33_c1 = []byte {0x33, 0xc1} // data from 509, 386, 387
-	twojRequestService33_d7 = []byte {0x33, 0xd7} // checks multiple bit fields to see if clear, returns OK if so, 7F otherwise
-
-
-/*
-Service 0x31
-
-d6 - swap to normal calibration
-d7 - swap to NOSELECT calibration and set immo code to 0xffff (disable it?)
-*/
-
-
-	twojRequestData00 = []byte {0x21, 0x00}
-	twojRequestData01 = []byte {0x21, 0x01}
-	twojRequestData02 = []byte {0x21, 0x02}
-	twojRequestData03 = []byte {0x21, 0x03}
-	twojRequestData05 = []byte {0x21, 0x05}
-	twojRequestData06 = []byte {0x21, 0x06}
-	twojRequestData07 = []byte {0x21, 0x07}
-	twojRequestData08 = []byte {0x21, 0x08}
-	twojRequestData09 = []byte {0x21, 0x09}
-	twojRequestData0A = []byte {0x21, 0x0A}
-	twojRequestData0B = []byte {0x21, 0x0B}
-	twojRequestData0C = []byte {0x21, 0x0C}
-	twojRequestData0D = []byte {0x21, 0x0D}
-	twojRequestData0F = []byte {0x21, 0x0F}
-	twojRequestData10 = []byte {0x21, 0x10}
-	twojRequestData11 = []byte {0x21, 0x11}
-	twojRequestData12 = []byte {0x21, 0x12}
-	twojRequestData13 = []byte {0x21, 0x13}
-	twojRequestFaultsCommand = []byte {0x21, 0x19}
-	twojRequestData21 = []byte {0x21, 0x21}
-	twojRequestData25 = []byte {0x21, 0x25}
-	twojRequestData3A = []byte {0x21, 0x3A}
-
-	twojWokeResponse = []byte {0xc1, 0xd5, 0x8f}
-	twojStartDiagResponse = []byte {0x50}
-	twojSeedResponse = []byte {0x67, 0x01}
-	twojSeed = 0
-	twojKey = 0
-	twojKeyAcceptResponse = []byte {0x67, 0x02}
-	twojPongResponse = []byte {0x7E}
-
-
-	twojFaultsResponse = []byte {0x61, 0x19}
-
-	twojResponseData00 = []byte {0x61, 0x00}
-	twojResponseData01 = []byte {0x61, 0x01}
-	twojResponseData02 = []byte {0x61, 0x02}
-	twojResponseData03 = []byte {0x61, 0x03}
-	twojResponseData05 = []byte {0x61, 0x05}
-	twojResponseData06 = []byte {0x61, 0x06}
-	twojResponseData07 = []byte {0x61, 0x07}
-	twojResponseData08 = []byte {0x61, 0x08}
-	twojResponseData09 = []byte {0x61, 0x09}
-	twojResponseData0A = []byte {0x61, 0x0A}
-	twojResponseData0B = []byte {0x61, 0x0B}
-	twojResponseData0C = []byte {0x61, 0x0C}
-	twojResponseData0D = []byte {0x61, 0x0D}
-	twojResponseData0F = []byte {0x61, 0x0F}
-	twojResponseData10 = []byte {0x61, 0x10}
-	twojResponseData11 = []byte {0x61, 0x11}
-	twojResponseData12 = []byte {0x61, 0x12}
-	twojResponseData13 = []byte {0x61, 0x13}
-	twojResponseData21 = []byte {0x61, 0x21}
-	twojResponseData25 = []byte {0x61, 0x25}
-	twojResponseData3A = []byte {0x61, 0x3A}
-
-	twojRefusePing = []byte {0x7F, 0x3e, 0x10}
-
-	twojUserCommands = map[string] []byte{
-		"clearfaults": twojClearFaultsCommand,
-		"learnimmo": twojLearnImmoCommand,
-		"read722": twojRead722Command,
-		// "readrom": twojReadRomCommand,
-		"service13": twojRequestService13,
-
-		"service31_d5": twojRequestService31_d5,
-
-		"service33_d5": twojRequestService33_d5,
-	  "service33_c0": twojRequestService33_c0,
-	  "service33_c8": twojRequestService33_c8,
-	  "service33_d2": twojRequestService33_d2,
-	  "service33_d4": twojRequestService33_d4,
-	  "service33_da": twojRequestService33_da,
-	  "service33_c1": twojRequestService33_c1,
-	  "service33_d7": twojRequestService33_d7,
-	}
-
-)
-
-func twojSendCommand(sp sers.SerialPort, command []byte) {
-	// fmt.Println("twojSendCommand")
-	finalCommand := []byte {byte(len(command))}
-
-	for i := 0; i < len(command); i++ {
-		finalCommand = append(finalCommand, command[i])
-	}
-
-  checksum := 0
-	for i := 0; i < len(finalCommand); i++ {
-    checksum += int(finalCommand[i])
-  }
-  checksum = checksum & 0xFF
-	finalCommand = append(finalCommand, byte(checksum))
-	// fmt.Printf("sending %d bytes \n%s", len(finalCommand), hex.Dump(finalCommand))
-	twojLastSentCommand = finalCommand
-	sp.Write(finalCommand)
+func init() {
+	ecu.Register("2J", NewMEMS2J)
 }
 
+// MEMS2J handles MEMS 2J ECUs (KV6, K-series).
+type MEMS2J struct {
+	mu        sync.RWMutex
+	data      map[string]float32
+	faults    []string
+	alert     string
+	connected bool
+	debugMode bool
 
-// this is the logic of what to do next based on what is received
-func twojSendNextCommand(sp sers.SerialPort, previousResponse []byte) {
+	sp              sers.SerialPort
+	reader          *serial.Reader
+	lastSentCommand []byte
+	seed            int
+	key             int
+	userCommand     string
+}
 
-	if globalUserCommand != "" {
-		command, ok := twojUserCommands[globalUserCommand];
+// NewMEMS2J creates a new MEMS 2J ECU handler.
+func NewMEMS2J(_ *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
+	return &MEMS2J{
+		data:      make(map[string]float32),
+		faults:    []string{},
+		reader:    serial.NewReader(),
+		debugMode: cfg.DebugMode,
+	}, nil
+}
+
+func (m *MEMS2J) Connect(portName string) error {
+	m.logDebug("Connecting to MEMS 2J ECU")
+	m.mu.Lock()
+	m.connected = false
+	m.mu.Unlock()
+
+	sp, err := sers.Open(portName)
+	if err != nil {
+		return err
+	}
+	m.sp = sp
+
+	if err = sp.SetMode(10400, 8, sers.N, 1, sers.NO_HANDSHAKE); err != nil {
+		sp.Close()
+		return err
+	}
+
+	if err = sp.SetReadParams(0, 0); err != nil {
+		sp.Close()
+		return err
+	}
+
+	mode, _ := sp.GetMode()
+	m.logDebug("Serial cable set to:")
+	m.logDebug(fmt.Sprint(mode))
+
+	m.reader.Start(sp)
+
+	if err := m.wakeUp(); err != nil {
+		sp.Close()
+		return err
+	}
+
+	return nil
+}
+
+func (m *MEMS2J) ReadData() error {
+	return m.loop()
+}
+
+func (m *MEMS2J) GetFaults() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]string, len(m.faults))
+	copy(result, m.faults)
+	return result
+}
+
+func (m *MEMS2J) GetData() map[string]float32 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make(map[string]float32, len(m.data))
+	for k, v := range m.data {
+		result[k] = v
+	}
+	return result
+}
+
+func (m *MEMS2J) IsConnected() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.connected
+}
+
+func (m *MEMS2J) SendCommand(cmd string) error {
+	m.mu.Lock()
+	m.userCommand = cmd
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *MEMS2J) Close() error {
+	m.mu.Lock()
+	m.connected = false
+	m.mu.Unlock()
+	if m.sp != nil {
+		return m.sp.Close()
+	}
+	return nil
+}
+
+func (m *MEMS2J) Type() string {
+	return "2J"
+}
+
+func (m *MEMS2J) logDebug(msg string) {
+	if m.debugMode {
+		fmt.Println(msg)
+	}
+}
+
+func (m *MEMS2J) logDebugf(format string, args ...interface{}) {
+	if m.debugMode {
+		fmt.Printf(format+"\n", args...)
+	}
+}
+
+var (
+	initCommand = []byte{0x81, 0x13, 0xF7, 0x81, 0x0C}
+
+	startDiagnostic = []byte{0x10, 0xA0}
+	requestSeed     = []byte{0x27, 0x01}
+	sendKey         = []byte{0x27, 0x02}
+	pingCommand     = []byte{0x3E}
+
+	clearFaultsCommand    = []byte{0x31, 0xCB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	faultsClearedResponse = []byte{0x71, 0xCB}
+
+	learnImmoCommand         = []byte{0x31, 0xD0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	responseLearnImmoCommand = []byte{0x71, 0xD0}
+
+	read722Command = []byte{0x23, 0x00, 0x07, 0x22, 0x01}
+
+	requestService13    = []byte{0x13}
+	requestService31_d5 = []byte{0x31, 0xd5}
+	requestService33_d5 = []byte{0x33, 0xd5}
+	requestService33_c0 = []byte{0x33, 0xc0}
+	requestService33_c8 = []byte{0x33, 0xc8}
+	requestService33_d2 = []byte{0x33, 0xd2}
+	requestService33_d4 = []byte{0x33, 0xd4}
+	requestService33_da = []byte{0x33, 0xda}
+	requestService33_c1 = []byte{0x33, 0xc1}
+	requestService33_d7 = []byte{0x33, 0xd7}
+
+	requestData00        = []byte{0x21, 0x00}
+	requestData01        = []byte{0x21, 0x01}
+	requestData02        = []byte{0x21, 0x02}
+	requestData03        = []byte{0x21, 0x03}
+	requestData05        = []byte{0x21, 0x05}
+	requestData06        = []byte{0x21, 0x06}
+	requestData07        = []byte{0x21, 0x07}
+	requestData08        = []byte{0x21, 0x08}
+	requestData09        = []byte{0x21, 0x09}
+	requestData0A        = []byte{0x21, 0x0A}
+	requestData0B        = []byte{0x21, 0x0B}
+	requestData0C        = []byte{0x21, 0x0C}
+	requestData0D        = []byte{0x21, 0x0D}
+	requestData0F        = []byte{0x21, 0x0F}
+	requestData10        = []byte{0x21, 0x10}
+	requestData11        = []byte{0x21, 0x11}
+	requestData12        = []byte{0x21, 0x12}
+	requestData13        = []byte{0x21, 0x13}
+	requestFaultsCommand = []byte{0x21, 0x19}
+	requestData21        = []byte{0x21, 0x21}
+	requestData25        = []byte{0x21, 0x25}
+	requestData3A        = []byte{0x21, 0x3A}
+
+	wokeResponse      = []byte{0xc1, 0xd5, 0x8f}
+	startDiagResponse = []byte{0x50}
+	seedResponse      = []byte{0x67, 0x01}
+	keyAcceptResponse = []byte{0x67, 0x02}
+	pongResponse      = []byte{0x7E}
+	faultsResponse    = []byte{0x61, 0x19}
+
+	responseData00 = []byte{0x61, 0x00}
+	responseData01 = []byte{0x61, 0x01}
+	responseData02 = []byte{0x61, 0x02}
+	responseData03 = []byte{0x61, 0x03}
+	responseData05 = []byte{0x61, 0x05}
+	responseData06 = []byte{0x61, 0x06}
+	responseData07 = []byte{0x61, 0x07}
+	responseData08 = []byte{0x61, 0x08}
+	responseData09 = []byte{0x61, 0x09}
+	responseData0A = []byte{0x61, 0x0A}
+	responseData0B = []byte{0x61, 0x0B}
+	responseData0C = []byte{0x61, 0x0C}
+	responseData0D = []byte{0x61, 0x0D}
+	responseData0F = []byte{0x61, 0x0F}
+	responseData10 = []byte{0x61, 0x10}
+	responseData11 = []byte{0x61, 0x11}
+	responseData12 = []byte{0x61, 0x12}
+	responseData13 = []byte{0x61, 0x13}
+	responseData21 = []byte{0x61, 0x21}
+	responseData25 = []byte{0x61, 0x25}
+	responseData3A = []byte{0x61, 0x3A}
+
+	refusePing = []byte{0x7F, 0x3e, 0x10}
+
+	userCommands = map[string][]byte{
+		"clearfaults":  clearFaultsCommand,
+		"learnimmo":    learnImmoCommand,
+		"read722":      read722Command,
+		"service13":    requestService13,
+		"service31_d5": requestService31_d5,
+		"service33_d5": requestService33_d5,
+		"service33_c0": requestService33_c0,
+		"service33_c8": requestService33_c8,
+		"service33_d2": requestService33_d2,
+		"service33_d4": requestService33_d4,
+		"service33_da": requestService33_da,
+		"service33_c1": requestService33_c1,
+		"service33_d7": requestService33_d7,
+	}
+)
+
+func (m *MEMS2J) sendCommand(command []byte) {
+	finalCommand := []byte{byte(len(command))}
+	finalCommand = append(finalCommand, command...)
+
+	checksum := 0
+	for i := 0; i < len(finalCommand); i++ {
+		checksum += int(finalCommand[i])
+	}
+	checksum = checksum & 0xFF
+	finalCommand = append(finalCommand, byte(checksum))
+
+	m.lastSentCommand = finalCommand
+	m.sp.Write(finalCommand)
+}
+
+func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
+	m.mu.Lock()
+	cmd := m.userCommand
+	m.mu.Unlock()
+
+	if cmd != "" {
+		command, ok := userCommands[cmd]
 		if ok {
-			fmt.Println("Running 2J user command")
-			globalUserCommand = ""
-			twojSendCommand(sp, command)
+			m.logDebug("Running 2J user command: " + cmd)
+			m.mu.Lock()
+			m.userCommand = ""
+			m.mu.Unlock()
+			m.sendCommand(command)
 			return
 		} else {
-			fmt.Println("Asked to perform a user command but don't understand it")
+			m.logDebug("Unknown user command: " + cmd)
+			m.mu.Lock()
+			m.userCommand = ""
+			m.mu.Unlock()
 		}
 	}
 
-	globalUserCommand = ""
-	if slicesEqual(previousResponse, twojWokeResponse) {
-		twojSendCommand(sp, twojStartDiagnostic)
-
-	} else if slicesEqual(previousResponse, twojStartDiagResponse) {
-		twojSendCommand(sp, twojRequestSeed)
-
-	} else if slicesEqual(previousResponse[0:2], twojSeedResponse) {
-		command := append(twojSendKey, byte(twojKey >> 8))
-		command = append(command, byte(twojKey & 0xFF))
-		twojSendCommand(sp, command)
-
-	} else if slicesEqual(previousResponse, twojKeyAcceptResponse) {
-		twojSendCommand(sp, twojPingCommand)
-
-	} else if slicesEqual(previousResponse, twojPongResponse) {
-		twojSendCommand(sp, twojRequestFaultsCommand)
-
-	} else if slicesEqual(previousResponse, twojFaultsClearedResponse) {
-		twojSendCommand(sp, twojRequestFaultsCommand)
-
-	} else if slicesEqual(previousResponse, twojResponseLearnImmoCommand) {
-		twojSendCommand(sp, twojRequestData00)
-
-	} else if slicesEqual(previousResponse[0:2], twojFaultsResponse[0:2]) { twojSendCommand(sp, twojRequestData00)
-
-	} else if slicesEqual(previousResponse[0:2], twojResponseData00) { twojSendCommand(sp, twojRequestData01)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData01) { twojSendCommand(sp, twojRequestData02)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData02) { twojSendCommand(sp, twojRequestData03)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData03) { twojSendCommand(sp, twojRequestData05)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData05) { twojSendCommand(sp, twojRequestData06)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData06) { twojSendCommand(sp, twojRequestData07)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData07) { twojSendCommand(sp, twojRequestData08)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData08) { twojSendCommand(sp, twojRequestData09)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData09) { twojSendCommand(sp, twojRequestData0A)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData0A) { twojSendCommand(sp, twojRequestData0B)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData0B) { twojSendCommand(sp, twojRequestData0C)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData0C) { twojSendCommand(sp, twojRequestData0D)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData0D) { twojSendCommand(sp, twojRequestData0F)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData0F) { twojSendCommand(sp, twojRequestData10)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData10) { twojSendCommand(sp, twojRequestData11)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData11) { twojSendCommand(sp, twojRequestData12)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData12) { twojSendCommand(sp, twojRequestData13)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData13) { twojSendCommand(sp, twojRequestData21)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData21) { twojSendCommand(sp, twojRequestData25)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData25) { twojSendCommand(sp, twojRequestData3A)
-	} else if slicesEqual(previousResponse[0:2], twojResponseData3A) { twojSendCommand(sp, twojPingCommand)
-
-	} else if slicesEqual(previousResponse, twojRefusePing) {
-		// cope with not authed? it can refuse 3e ping
-		twojSendCommand(sp, twojRequestSeed)	
-
-	} else { // fall back to ping
-		fmt.Println("Falling back to ping command")
-		twojSendCommand(sp, twojPingCommand)
+	if utils.SlicesEqual(previousResponse, wokeResponse) {
+		m.sendCommand(startDiagnostic)
+	} else if utils.SlicesEqual(previousResponse, startDiagResponse) {
+		m.sendCommand(requestSeed)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], seedResponse) {
+		command := append(sendKey, byte(m.key>>8))
+		command = append(command, byte(m.key&0xFF))
+		m.sendCommand(command)
+	} else if utils.SlicesEqual(previousResponse, keyAcceptResponse) {
+		m.sendCommand(pingCommand)
+	} else if utils.SlicesEqual(previousResponse, pongResponse) {
+		m.sendCommand(requestFaultsCommand)
+	} else if utils.SlicesEqual(previousResponse, faultsClearedResponse) {
+		m.sendCommand(requestFaultsCommand)
+	} else if utils.SlicesEqual(previousResponse, responseLearnImmoCommand) {
+		m.sendCommand(requestData00)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], faultsResponse[0:2]) {
+		m.sendCommand(requestData00)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData00) {
+		m.sendCommand(requestData01)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData01) {
+		m.sendCommand(requestData02)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData02) {
+		m.sendCommand(requestData03)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData03) {
+		m.sendCommand(requestData05)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData05) {
+		m.sendCommand(requestData06)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData06) {
+		m.sendCommand(requestData07)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData07) {
+		m.sendCommand(requestData08)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData08) {
+		m.sendCommand(requestData09)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData09) {
+		m.sendCommand(requestData0A)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0A) {
+		m.sendCommand(requestData0B)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0B) {
+		m.sendCommand(requestData0C)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0C) {
+		m.sendCommand(requestData0D)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0D) {
+		m.sendCommand(requestData0F)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0F) {
+		m.sendCommand(requestData10)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData10) {
+		m.sendCommand(requestData11)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData11) {
+		m.sendCommand(requestData12)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData12) {
+		m.sendCommand(requestData13)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData13) {
+		m.sendCommand(requestData21)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData21) {
+		m.sendCommand(requestData25)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData25) {
+		m.sendCommand(requestData3A)
+	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData3A) {
+		m.sendCommand(pingCommand)
+	} else if utils.SlicesEqual(previousResponse, refusePing) {
+		m.sendCommand(requestSeed)
+	} else {
+		m.logDebug("Falling back to ping command")
+		m.sendCommand(pingCommand)
 	}
-
 }
 
-
-func readFirstBytesFromPortTwoj(fn string) ([]byte, error) {
-
-	fmt.Println("Connecting to 2J ECU")
-	globalConnected = false
-
-	sp, err := sers.Open(fn)
-	if err != nil {
-		return nil, err
-	}
-	defer sp.Close()
-
-	err = sp.SetMode(10400, 8, sers.N, 1, sers.NO_HANDSHAKE)
-	if err != nil {
-		return nil, err
-	}
-	// setting:
-	// minread = 0: minimal buffering on read, return characters as early as possible
-	// timeout = 1.0: time out if after 1.0 seconds nothing is received
-	err = sp.SetReadParams(0, 0)
-	if err != nil {
-		return nil, err
-	}
-	mode, err := sp.GetMode()
-	fmt.Println("Serial cable set to:")
-	fmt.Println(mode)
-
-	// TODO: this is not great, it will keep spawning new ones on every reconnect
-	// but they are completely locked by the blocking read in Linux
-	// they might behave weirdly in Windows, test it
-	go serialReadRoutine(sp)
-
-	sp.SetBreak(false)
+func (m *MEMS2J) wakeUp() error {
+	m.sp.SetBreak(false)
 	time.Sleep(200 * time.Millisecond)
 
-	sp.SetBreak(true)
+	m.sp.SetBreak(true)
 	time.Sleep(25 * time.Millisecond)
-	sp.SetBreak(false)
+	m.sp.SetBreak(false)
 	time.Sleep(25 * time.Millisecond)
 
 	time.Sleep(50 * time.Millisecond)
 
-	sp.Write(twojInitCommand)
-	fmt.Println("Done sending init command")
+	m.sp.Write(initCommand)
+	m.logDebug("Done sending init command")
 
+	return nil
+}
 
+func (m *MEMS2J) loop() error {
 	buffer := make([]byte, 0)
-
-	lastReceivedData := timestampMs()
+	lastReceivedData := utils.TimestampMs()
 	timeoutMs := int64(1000)
 
-	for timestampMs() < lastReceivedData + timeoutMs {
-		// this timeout needs changing to time without an answer rather than number of loops
-		// readLoops++
-
-		newData := nonBlockingSerialRead()
+	for utils.TimestampMs() < lastReceivedData+timeoutMs {
+		newData := m.reader.Read()
 		if len(newData) > 0 {
-			lastReceivedData = timestampMs()
+			lastReceivedData = utils.TimestampMs()
 		}
 		buffer = append(buffer, newData...)
 
-		// clear leading zeros (from our wake up)
 		for len(buffer) > 0 && buffer[0] == 0x00 {
-			fmt.Println("Cleared leading zeros")
+			m.logDebug("Cleared leading zeros")
 			buffer = buffer[1:]
 		}
 
 		if len(buffer) == 0 {
-			// fmt.Println("buffer empty")
-			time.Sleep(1 * time.Millisecond) // dont hammer CPU
+			time.Sleep(1 * time.Millisecond)
 			continue
 		}
 
-		// check for our init echo
-		if len(buffer) >= 5 && slicesEqual(buffer[0:len(twojInitCommand)], twojInitCommand) {
-			fmt.Println("Got our init echo")
-			buffer = buffer[len(twojInitCommand):]
-			// fmt.Print(hex.Dump(buffer))
+		if len(buffer) >= 5 && utils.SlicesEqual(buffer[0:len(initCommand)], initCommand) {
+			m.logDebug("Got our init echo")
+			buffer = buffer[len(initCommand):]
 			continue
 		}
-
-		// check for full commands - our echos and responses too
 
 		packetSize := int(buffer[0])
-		// TODO: check for implausible packet size
-
-		if len(buffer) < packetSize + 2 {
-			// fmt.Println("waiting for rest of data packet")
-			time.Sleep(1 * time.Millisecond) // dont hammer CPU
+		if len(buffer) < packetSize+2 {
+			time.Sleep(1 * time.Millisecond)
 			continue
 		}
 
-		// TODO: check checksum ?
+		actualData := buffer[1 : packetSize+1]
+		fullPacket := buffer[0 : packetSize+2]
 
-		actualData := buffer[1:packetSize+1] // doesn't include len or checksum
-		fullPacket := buffer[0:packetSize+2] // entire packet
-		// fmt.Printf("actual data: got %d bytes \n%s", len(actualData), hex.Dump(actualData))
-		// fmt.Printf("fullPacket: got %d bytes \n%s", len(fullPacket), hex.Dump(fullPacket))
-
-		// check for our echo
-		if len(twojLastSentCommand) > 0 && len(fullPacket) >= len(twojLastSentCommand) && slicesEqual(fullPacket[0:len(twojLastSentCommand)], twojLastSentCommand) {
-			buffer = buffer[len(twojLastSentCommand):]
-			// fmt.Println("Got our last command echo, buffer now:")
-			// fmt.Print(hex.Dump(buffer))
-			// fmt.Println(len(buffer))
+		if len(m.lastSentCommand) > 0 && len(fullPacket) >= len(m.lastSentCommand) && utils.SlicesEqual(fullPacket[0:len(m.lastSentCommand)], m.lastSentCommand) {
+			buffer = buffer[len(m.lastSentCommand):]
 			continue
 		}
 
-		// fmt.Println("must have a response that needs parsing:")
-		// fmt.Print(hex.Dump(fullPacket))
-		// fmt.Print(hex.Dump(actualData))
-		twojParseResponse(actualData)
+		m.parseResponse(actualData)
 		buffer = nil
 		time.Sleep(25 * time.Millisecond)
-		twojSendNextCommand(sp, actualData)
+		m.sendNextCommand(actualData)
 	}
 
-	if timestampMs() >= lastReceivedData + timeoutMs {
-		// fmt.Printf("had buffer data: got %d bytes \n%s", len(buffer), hex.Dump(buffer))
-		return nil, errors.New("MEMS 2J timed out")
+	if utils.TimestampMs() >= lastReceivedData+timeoutMs {
+		return errors.New("MEMS 2J timed out")
 	}
-	fmt.Println("fell out of readloop somehow")
+	m.logDebug("Read loop exited normally")
 
-	return nil, err
+	return nil
 }

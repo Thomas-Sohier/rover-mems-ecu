@@ -1,29 +1,35 @@
-package main
+package rc5
 
 import (
-	"fmt"
-	"time"
 	"errors"
-	// "encoding/hex"
-	"github.com/distributed/sers"
+	"fmt"
 	"strconv"
+	"time"
+
+	"rover-mems-agent/internal/ecu"
+
+	"github.com/distributed/sers"
 )
 
+func init() {
+	ecu.Register("rc5", NewRC5)
+}
+
 var (
-	rc5PingCommand = []byte {0x82, 0x00, 0x7D}
-	rc5RequestFaultsCommand = []byte {0x82, 0x33, 0x4A}
-	rc5ClearFaultsCommand = []byte {0x82, 0xC3, 0xBA}
+	pingCommand          = []byte{0x82, 0x00, 0x7D}
+	requestFaultsCommand = []byte{0x82, 0x33, 0x4A}
+	clearFaultsCommand   = []byte{0x82, 0xC3, 0xBA}
 
-	rc5WokeResponse = []byte {0x55, 0x06, 0x3B}
-	rc5PongResponse = []byte {0xC2, 0x00, 0x3D}
-	rc5FaultsResponse = []byte {0x33}
-	rc5FaultsClearedResponse = []byte {0xC2, 0xC3, 0x7A}
+	wokeResponse          = []byte{0x55, 0x06, 0x3B}
+	pongResponse          = []byte{0xC2, 0x00, 0x3D}
+	faultsResponse        = []byte{0x33}
+	faultsClearedResponse = []byte{0xC2, 0xC3, 0x7A}
 
-	rc5UserCommands = map[string] []byte{
-		"clearfaults": rc5ClearFaultsCommand,
+	userCommands = map[string][]byte{
+		"clearfaults": clearFaultsCommand,
 	}
 
-	rc5Faults = map[int]string{
+	faultCodes = map[int]string{
 		0x150A: "Driver airbag shorted to battery positive",
 		0x150B: "Driver airbag shorted to battery negative",
 		0x150C: "Driver airbag high resistance",
@@ -48,7 +54,6 @@ var (
 		0x160C: "SRS warning lamp short circuit",
 		0x160D: "SRS warning lamp open circuit",
 		0x160E: "SRS warning lamp driver",
-		
 		0x250A: "(Historic) Driver airbag shorted to battery positive",
 		0x250B: "(Historic) Driver airbag shorted to battery negative",
 		0x250C: "(Historic) Driver airbag high resistance",
@@ -73,75 +78,54 @@ var (
 		0x260C: "(Historic) SRS warning lamp short circuit",
 		0x260D: "(Historic) SRS warning lamp open circuit",
 		0x260E: "(Historic) SRS warning lamp driver",
-
 		0x0000: "0x0000 Unknown fault, power cycle and try again",
 	}
 )
 
-
-func rc5SendNextCommand(sp sers.SerialPort, previousResponse []byte) {
-	if globalUserCommand != "" {
-		command, ok := rc5UserCommands[globalUserCommand];
-		if ok {
-			globalUserCommand = ""
-			sp.Write(command)
-			return
-		} else {
-			fmt.Println("Asked to perform a user command but don't understand it")
-		}
-	}
-
-	globalUserCommand = ""
-	if slicesEqual(previousResponse, rc5PongResponse) {
-		sp.Write(rc5RequestFaultsCommand)
-
-	} else if slicesEqual(previousResponse, rc5WokeResponse) || slicesEqual(previousResponse, rc5FaultsResponse) {
-		sp.Write(rc5PingCommand)
-
-	} else if slicesEqual(previousResponse, rc5FaultsClearedResponse) {
-		sp.Write(rc5RequestFaultsCommand)
-
-	} else { // fall back to ping
-		sp.Write(rc5PingCommand)
-	}
-
-
+// RC5 handles RC5 airbag ECUs.
+type RC5 struct {
+	state *ecu.State
+	sp    sers.SerialPort
 }
 
-func readFirstBytesFromPortRc5(fn string) ([]byte, error) {
+// NewRC5 creates a new RC5 ECU handler.
+func NewRC5(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
+	state.DebugMode = cfg.DebugMode
+	return &RC5{state: state}, nil
+}
 
+func (r *RC5) Connect(portName string) error {
 	fmt.Println("Connecting to RC5 ECU")
-	globalConnected = false
+	r.state.Lock()
+	r.state.Connected = false
+	r.state.Unlock()
 
-	sp, err := sers.Open(fn)
+	sp, err := sers.Open(portName)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer sp.Close()
+	r.sp = sp
 
 	err = sp.SetMode(2400, 8, sers.N, 1, sers.NO_HANDSHAKE)
 	if err != nil {
-		return nil, err
+		sp.Close()
+		return err
 	}
 
-	// setting:
-	// minread = 0: minimal buffering on read, return characters as early as possible
-	// timeout = 1.0: time out if after 1.0 seconds nothing is received
 	err = sp.SetReadParams(0, 0.001)
 	if err != nil {
-		return nil, err
+		sp.Close()
+		return err
 	}
 
-	mode, err := sp.GetMode()
+	mode, _ := sp.GetMode()
 	fmt.Println("Serial cable set to:")
 	fmt.Println(mode)
 
 	sp.SetBreak(false)
 	time.Sleep(2000 * time.Millisecond)
-
 	sp.SetBreak(true)
 	time.Sleep(200 * time.Millisecond)
-
 	sp.SetBreak(false)
 	time.Sleep(400 * time.Millisecond)
 	sp.SetBreak(true)
@@ -150,43 +134,32 @@ func readFirstBytesFromPortRc5(fn string) ([]byte, error) {
 	time.Sleep(400 * time.Millisecond)
 	sp.SetBreak(true)
 	time.Sleep(400 * time.Millisecond)
-
 	sp.SetBreak(false)
 	time.Sleep(200 * time.Millisecond)
 
-	// TODO: get rid of this
-	// time.Sleep(1000 * time.Millisecond)
-
-	// buffer to read into
 	initBuffer := make([]byte, 0)
-
 	initLoops := 0
 	initLoopsLimit := 100
+
 	for initLoops < initLoopsLimit {
 		initLoops++
 		if initLoops > 1 {
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		var rb []byte
-		rb = make([]byte, 128)
-
-		// read
+		rb := make([]byte, 128)
 		n, err := sp.Read(rb[:])
-		if err != nil { continue }
-		if n == 0 { continue }
-		// fmt.Println("got some bytes:")
-		// fmt.Println(n)
-		// fmt.Printf("got %d bytes \n%s", len(initBuffer), hex.Dump(initBuffer))
+		if err != nil {
+			continue
+		}
+		if n == 0 {
+			continue
+		}
 
-		// chop down to actual data size
 		rb = rb[0:n]
 		initBuffer = append(initBuffer, rb...)
 
-
-		// strip leading zeros (wake breaks causing them)
-		for (len(initBuffer) > 0 && initBuffer[0] == 0x00) {
-			// fmt.Println("Stripping leading zero")
+		for len(initBuffer) > 0 && initBuffer[0] == 0x00 {
 			initBuffer = initBuffer[1:]
 		}
 
@@ -194,36 +167,30 @@ func readFirstBytesFromPortRc5(fn string) ([]byte, error) {
 			continue
 		}
 
-		if slicesEqual(initBuffer[0:3], rc5WokeResponse) {
+		if slicesEqual(initBuffer[0:3], wokeResponse) {
 			fmt.Println("RC5 woke up")
-			globalConnected = true
-			break
+			r.state.Lock()
+			r.state.Connected = true
+			r.state.Unlock()
+			return nil
 		} else {
-			return nil, errors.New("Unsure what RC5 sent back, aborting")
+			sp.Close()
+			return errors.New("Unsure what RC5 sent back, aborting")
 		}
-
-	}
-	if initLoops >= initLoopsLimit {
-		return nil, errors.New("Timed out waiting for RC5 to wake up")
 	}
 
-	// wait 700ms after first connect
-	// normall sleep 200ms, so 500 extra this time
+	sp.Close()
+	return errors.New("Timed out waiting for RC5 to wake up")
+}
+
+func (r *RC5) ReadData() error {
 	time.Sleep(500 * time.Millisecond)
-
-
-
-
-
-
-	// go into proper read/write loop here, with ping as first command
-
 	time.Sleep(200 * time.Millisecond)
-	rc5SendNextCommand(sp, rc5WokeResponse)
+	r.sendNextCommand(wokeResponse)
 
 	buffer := make([]byte, 0)
-
 	readLoops := 0
+
 	for readLoops < 100 {
 		readLoops++
 		if readLoops > 1 {
@@ -231,98 +198,157 @@ func readFirstBytesFromPortRc5(fn string) ([]byte, error) {
 		}
 
 		rb := make([]byte, 128)
-		n, _ := sp.Read(rb[:])
-		rb = rb[0:n] // chop down to actual data size
+		n, _ := r.sp.Read(rb[:])
+		rb = rb[0:n]
 		buffer = append(buffer, rb...)
 		if n > 0 {
-			readLoops = 0 // reset timeout
+			readLoops = 0
 		}
 
-		if len(buffer) == 0 { continue }
+		if len(buffer) == 0 {
+			continue
+		}
 
 		if len(buffer) >= 3 {
-
-			// check for our echos and throw them away
-			if slicesEqual(buffer[0:3], rc5PingCommand) {
+			if slicesEqual(buffer[0:3], pingCommand) ||
+				slicesEqual(buffer[0:3], requestFaultsCommand) ||
+				slicesEqual(buffer[0:3], clearFaultsCommand) {
 				buffer = buffer[3:]
-				continue;
-			}	else if slicesEqual(buffer[0:3], rc5RequestFaultsCommand) {
-				buffer = buffer[3:]
-				continue;
-			} else if slicesEqual(buffer[0:3], rc5ClearFaultsCommand) {
-				buffer = buffer[3:]
-				continue;
+				continue
 			}
 
-
-			if slicesEqual(buffer[0:3], rc5PongResponse) {
+			if slicesEqual(buffer[0:3], pongResponse) {
 				fmt.Println("< PONG from ECU")
 				buffer = buffer[3:]
 				time.Sleep(200 * time.Millisecond)
-				rc5SendNextCommand(sp, rc5PongResponse)
+				r.sendNextCommand(pongResponse)
 				continue
 			}
 
-			if slicesEqual(buffer[0:3], rc5FaultsClearedResponse) {
+			if slicesEqual(buffer[0:3], faultsClearedResponse) {
 				fmt.Println("< FAULT CODES CLEARED")
-				globalAlert = "ECU reports faults cleared"
+				r.state.Lock()
+				r.state.Alert = "ECU reports faults cleared"
+				r.state.Unlock()
 				buffer = buffer[3:]
 				time.Sleep(200 * time.Millisecond)
-				rc5SendNextCommand(sp, rc5FaultsClearedResponse)
+				r.sendNextCommand(faultsClearedResponse)
 				continue
 			}
 
-			// faults returned
-			if len(buffer) > 2 && buffer[1] == rc5FaultsResponse[0] {
+			if len(buffer) > 2 && buffer[1] == faultsResponse[0] {
 				expectedLength := buffer[0]
 				expectedLength = expectedLength - 0xC0 + 1
 				if len(buffer) < int(expectedLength) {
 					continue
 				}
 				fmt.Println("< FAULTS Got fault codes!")
-
-				rc5ParseFaults(buffer)
-
+				r.parseFaults(buffer)
 				buffer = buffer[expectedLength:]
 				time.Sleep(200 * time.Millisecond)
-				rc5SendNextCommand(sp, rc5FaultsResponse)
+				r.sendNextCommand(faultsResponse)
 				continue
 			}
-
 		}
-
 	}
+
 	if readLoops == 100 {
-		return nil, errors.New("readloop timed out")
+		return errors.New("readloop timed out")
 	}
 	fmt.Println("fell out of readloop")
-
-	return nil, err
+	return nil
 }
 
-func rc5ParseFaults(buffer []byte) {
-	// fmt.Printf("got %d bytes \n%s", len(buffer), hex.Dump(buffer))
-	// remove first 2 bytes which are length/type
+func (r *RC5) sendNextCommand(previousResponse []byte) {
+	r.state.Lock()
+	cmd := r.state.UserCommand
+	r.state.Unlock()
+
+	if cmd != "" {
+		command, ok := userCommands[cmd]
+		if ok {
+			r.state.Lock()
+			r.state.UserCommand = ""
+			r.state.Unlock()
+			r.sp.Write(command)
+			return
+		} else {
+			fmt.Println("Asked to perform a user command but don't understand it")
+		}
+	}
+
+	r.state.Lock()
+	r.state.UserCommand = ""
+	r.state.Unlock()
+
+	if slicesEqual(previousResponse, pongResponse) {
+		r.sp.Write(requestFaultsCommand)
+	} else if slicesEqual(previousResponse, wokeResponse) || slicesEqual(previousResponse, faultsResponse) {
+		r.sp.Write(pingCommand)
+	} else if slicesEqual(previousResponse, faultsClearedResponse) {
+		r.sp.Write(requestFaultsCommand)
+	} else {
+		r.sp.Write(pingCommand)
+	}
+}
+
+func (r *RC5) parseFaults(buffer []byte) {
 	buffer = buffer[2:]
-	numFaults := len(buffer)/2
+	numFaults := len(buffer) / 2
 	fmt.Println("num faults:")
 	fmt.Println(numFaults)
 
-	faults := []string {}
+	faults := []string{}
 
-	i := 0
-	for i < numFaults {
-		fault := int(buffer[i*2]) << 8
-		fault += int(buffer[(i*2)+1])
-
-		faultText, ok := rc5Faults[fault];
+	for i := 0; i < numFaults; i++ {
+		fault := int(buffer[i*2])<<8 + int(buffer[(i*2)+1])
+		faultText, ok := faultCodes[fault]
 		if !ok {
-			faultText = "unknown fault: "+strconv.Itoa(fault);
+			faultText = "unknown fault: " + strconv.Itoa(fault)
 		}
-		// fmt.Println(faultText)
-
 		faults = append(faults, faultText)
-		i++
 	}
-	globalFaults = faults
+
+	r.state.Lock()
+	r.state.Faults = faults
+	r.state.Unlock()
+}
+
+func (r *RC5) GetFaults() []string {
+	r.state.RLock()
+	defer r.state.RUnlock()
+	return r.state.Faults
+}
+
+func (r *RC5) SendCommand(cmd string) error {
+	r.state.Lock()
+	r.state.UserCommand = cmd
+	r.state.Unlock()
+	return nil
+}
+
+func (r *RC5) Close() error {
+	r.state.Lock()
+	r.state.Connected = false
+	r.state.Unlock()
+	if r.sp != nil {
+		return r.sp.Close()
+	}
+	return nil
+}
+
+func (r *RC5) Type() string {
+	return "rc5"
+}
+
+func slicesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

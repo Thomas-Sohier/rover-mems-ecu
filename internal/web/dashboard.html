@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rover MEMS Diagnostic</title>
+<style>
+  :root {
+    --bg: #0d0f14;
+    --surface: #161920;
+    --surface2: #1e222d;
+    --border: #2a2f3d;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --accent: #3b82f6;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #f59e0b;
+    --orange: #f97316;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.05em; color: var(--accent); }
+  .status-pill {
+    display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+    border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+    background: var(--surface2); border: 1px solid var(--border);
+  }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .status-dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.error { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .ecu-badge { font-size: 11px; color: var(--muted); }
+
+  nav { display: flex; padding: 0 20px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  nav button {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    padding: 10px 16px; font-size: 12px; font-family: inherit; font-weight: 500;
+    border-bottom: 2px solid transparent; transition: color .15s, border-color .15s;
+  }
+  nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  nav button:hover:not(.active) { color: var(--text); }
+
+  .tab { display: none; padding: 20px; }
+  .tab.active { display: block; }
+
+  /* ── Alert / Error banner ── */
+  .banner {
+    display: none; align-items: center; gap: 10px;
+    padding: 10px 16px; border-radius: 6px; margin-bottom: 16px;
+    font-size: 12px; font-weight: 500;
+  }
+  .banner.alert { display: flex; background: #1c2a16; border: 1px solid var(--green); color: var(--green); }
+  .banner.error  { display: flex; background: #2a1616; border: 1px solid var(--red);   color: var(--red); }
+  .banner-close { margin-left: auto; cursor: pointer; opacity: .6; }
+  .banner-close:hover { opacity: 1; }
+
+  /* ── Fault strip ── */
+  .fault-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+  .fault-tag {
+    padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;
+    background: #2a1616; border: 1px solid var(--red); color: var(--red);
+  }
+  .fault-ok {
+    padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 500;
+    background: #16251a; border: 1px solid var(--green); color: var(--green);
+  }
+
+  /* ── Section title ── */
+  .section-title {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.12em;
+    color: var(--muted); text-transform: uppercase; margin-bottom: 10px; margin-top: 20px;
+  }
+  .section-title:first-child { margin-top: 0; }
+
+  /* ── Metric grid ── */
+  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+
+  .metric-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; position: relative; overflow: hidden;
+  }
+  .metric-card .label { font-size: 10px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; }
+  .metric-card .value { font-size: 26px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+  .metric-card .unit  { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+  /* big featured cards */
+  .metric-card.large { grid-column: span 2; }
+  .metric-card.large .value { font-size: 48px; }
+
+  /* bar indicator at the bottom of a card */
+  .metric-bar { position: absolute; bottom: 0; left: 0; height: 3px; background: var(--accent); border-radius: 0 0 8px 8px; transition: width .4s ease; }
+
+  /* status values */
+  .val-on  { color: var(--green); }
+  .val-off { color: var(--muted); }
+  .val-warn { color: var(--yellow); }
+  .val-hot  { color: var(--orange); }
+  .val-crit { color: var(--red); }
+
+  /* ── Bool chips (for switches / relays) ── */
+  .bool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+  .bool-row {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 9px 12px;
+  }
+  .bool-label { font-size: 11px; color: var(--muted); }
+  .bool-badge {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.08em; padding: 2px 8px;
+    border-radius: 10px;
+  }
+  .bool-badge.on  { background: #16251a; color: var(--green); border: 1px solid var(--green); }
+  .bool-badge.off { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+
+  /* ── Debug tab ── */
+  .debug-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .debug-grid { grid-template-columns: 1fr; } }
+
+  .debug-panel {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    display: flex; flex-direction: column;
+  }
+  .debug-panel-header {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--muted);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .debug-panel-body { padding: 12px 14px; overflow-y: auto; max-height: 420px; flex: 1; }
+
+  .log-line { font-size: 11px; line-height: 1.6; color: #94a3b8; border-bottom: 1px solid #1e222d; padding: 1px 0; word-break: break-all; }
+  .log-line:last-child { border-bottom: none; }
+
+  pre#raw-json { font-size: 11px; color: #94a3b8; white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+
+  .info-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .info-row:last-child { border-bottom: none; }
+  .info-row .k { color: var(--muted); }
+  .info-row .v { color: var(--text); font-weight: 500; }
+
+  .btn-clear {
+    background: none; border: 1px solid var(--border); color: var(--muted); cursor: pointer;
+    font-size: 10px; padding: 2px 8px; border-radius: 4px; font-family: inherit;
+  }
+  .btn-clear:hover { color: var(--text); border-color: var(--text); }
+
+  .ts { font-size: 10px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ROVER MEMS DIAGNOSTIC</h1>
+  <div class="header-right">
+    <span class="ecu-badge" id="ecu-badge">ECU: —</span>
+    <span class="ecu-badge" id="port-badge">PORT: —</span>
+    <span class="ecu-badge ts" id="ts-badge"></span>
+    <div class="status-pill">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">DISCONNECTED</span>
+    </div>
+  </div>
+</header>
+
+<nav>
+  <button class="active" onclick="showTab('dashboard', this)">Dashboard</button>
+  <button onclick="showTab('debug', this)">Debug</button>
+</nav>
+
+<!-- Alert / Error banners -->
+<div style="padding: 0 20px; padding-top: 16px;" id="banners">
+  <div class="banner alert" id="alert-banner">
+    <span id="alert-msg"></span>
+    <span class="banner-close" onclick="document.getElementById('alert-banner').style.display='none'">✕</span>
+  </div>
+  <div class="banner error" id="error-banner">
+    <span id="error-msg"></span>
+    <span class="banner-close" onclick="document.getElementById('error-banner').style.display='none'">✕</span>
+  </div>
+</div>
+
+<!-- ═══════════════ DASHBOARD TAB ═══════════════ -->
+<div id="tab-dashboard" class="tab active">
+
+  <!-- Faults -->
+  <div id="fault-strip" class="fault-strip"></div>
+
+  <!-- Engine -->
+  <div class="section-title">Engine</div>
+  <div class="metrics-grid">
+    <div class="metric-card large" id="card-rpm">
+      <div class="label">Engine Speed</div>
+      <div class="value" id="val-rpm">—</div>
+      <div class="unit">RPM</div>
+      <div class="metric-bar" id="bar-rpm" style="width:0%"></div>
+    </div>
+    <div class="metric-card" id="card-coolant">
+      <div class="label">Coolant Temp</div>
+      <div class="value" id="val-coolant">—</div>
+      <div class="unit">°C</div>
+      <div class="metric-bar" id="bar-coolant" style="width:0%"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Intake Air Temp</div>
+      <div class="value" id="val-iat">—</div>
+      <div class="unit">°C</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Ambient Temp</div>
+      <div class="value" id="val-ambient">—</div>
+      <div class="unit">°C</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Fuel Rail Temp</div>
+      <div class="value" id="val-fuel-rail-temp">—</div>
+      <div class="unit">°C</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Oil Temp</div>
+      <div class="value" id="val-oil-temp">—</div>
+      <div class="unit">°C</div>
+    </div>
+  </div>
+
+  <!-- Fuelling -->
+  <div class="section-title">Fuelling &amp; Air</div>
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="label">MAP Sensor</div>
+      <div class="value" id="val-map">—</div>
+      <div class="unit">kPa</div>
+      <div class="metric-bar" id="bar-map" style="width:0%"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Throttle Pot</div>
+      <div class="value" id="val-throttle-pot">—</div>
+      <div class="unit">V</div>
+      <div class="metric-bar" id="bar-throttle" style="width:0%"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Throttle Angle</div>
+      <div class="value" id="val-throttle-angle">—</div>
+      <div class="unit">°</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Lambda mV</div>
+      <div class="value" id="val-lambda-mv">—</div>
+      <div class="unit">mV</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Lambda Freq</div>
+      <div class="value" id="val-lambda-freq">—</div>
+      <div class="unit">Hz</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Lambda Duty</div>
+      <div class="value" id="val-lambda-duty">—</div>
+      <div class="unit">%</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Long Term Trim</div>
+      <div class="value" id="val-long-trim">—</div>
+      <div class="unit"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Short Term Trim</div>
+      <div class="value" id="val-short-trim">—</div>
+      <div class="unit">%</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">A/F Ratio (est)</div>
+      <div class="value" id="val-afr">—</div>
+      <div class="unit"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Fuelling Feedback</div>
+      <div class="value" id="val-fuel-feedback">—</div>
+      <div class="unit">%</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">O₂ Sensor</div>
+      <div class="value" id="val-o2">—</div>
+      <div class="unit">mV</div>
+    </div>
+  </div>
+
+  <!-- Ignition -->
+  <div class="section-title">Ignition</div>
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="label">Ignition Advance</div>
+      <div class="value" id="val-ign-advance">—</div>
+      <div class="unit">°</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Advance Offset</div>
+      <div class="value" id="val-ign-offset">—</div>
+      <div class="unit">°</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Coil Time</div>
+      <div class="value" id="val-coil-time">—</div>
+      <div class="unit">µs</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Coil 1 Charge</div>
+      <div class="value" id="val-coil1">—</div>
+      <div class="unit">ms</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Coil 2 Charge</div>
+      <div class="value" id="val-coil2">—</div>
+      <div class="unit">ms</div>
+    </div>
+  </div>
+
+  <!-- Idle -->
+  <div class="section-title">Idle Control</div>
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="label">Idle Valve Pos</div>
+      <div class="value" id="val-idle-valve">—</div>
+      <div class="unit">/ 180</div>
+      <div class="metric-bar" id="bar-idle-valve" style="width:0%"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Idle Setpoint</div>
+      <div class="value" id="val-idle-set">—</div>
+      <div class="unit">RPM</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Idle Deviation</div>
+      <div class="value" id="val-idle-dev">—</div>
+      <div class="unit">RPM</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Idle Error</div>
+      <div class="value" id="val-idle-err">—</div>
+      <div class="unit"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Idle Base Pos</div>
+      <div class="value" id="val-idle-base">—</div>
+      <div class="unit"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Idle Timing Offset</div>
+      <div class="value" id="val-idle-timing">—</div>
+      <div class="unit">°</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Idle Adjuster RPM</div>
+      <div class="value" id="val-idle-adj">—</div>
+      <div class="unit">RPM</div>
+    </div>
+  </div>
+
+  <!-- Injectors -->
+  <div class="section-title">Injectors</div>
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="label">Injector 1 PW</div>
+      <div class="value" id="val-inj1">—</div>
+      <div class="unit">µs</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Injector 2 PW</div>
+      <div class="value" id="val-inj2">—</div>
+      <div class="unit">µs</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Injector 3 PW</div>
+      <div class="value" id="val-inj3">—</div>
+      <div class="unit">µs</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Injector 4 PW</div>
+      <div class="value" id="val-inj4">—</div>
+      <div class="unit">µs</div>
+    </div>
+  </div>
+
+  <!-- Electrical -->
+  <div class="section-title">Electrical &amp; Misc</div>
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="label">Battery Voltage</div>
+      <div class="value" id="val-battery">—</div>
+      <div class="unit">V</div>
+      <div class="metric-bar" id="bar-battery" style="width:0%"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Vehicle Speed</div>
+      <div class="value" id="val-speed">—</div>
+      <div class="unit">km/h</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Crank Counter</div>
+      <div class="value" id="val-crank">—</div>
+      <div class="unit"></div>
+    </div>
+    <div class="metric-card">
+      <div class="label">CAM %</div>
+      <div class="value" id="val-cam">—</div>
+      <div class="unit">%</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">RPM Error</div>
+      <div class="value" id="val-rpm-err">—</div>
+      <div class="unit">RPM</div>
+    </div>
+  </div>
+
+  <!-- Switches & Relays -->
+  <div class="section-title">Switches &amp; Relays</div>
+  <div class="bool-grid">
+    <div class="bool-row"><span class="bool-label">Idle Switch</span><span class="bool-badge off" id="sw-idle">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Closed Loop</span><span class="bool-badge off" id="sw-closed-loop">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Ignition</span><span class="bool-badge off" id="sw-ignition">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Park / Neutral</span><span class="bool-badge off" id="sw-park">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Throttle Switch</span><span class="bool-badge off" id="sw-throttle">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">AC Button</span><span class="bool-badge off" id="sw-ac-btn">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Fan 1</span><span class="bool-badge off" id="sw-fan1">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Fan 2</span><span class="bool-badge off" id="sw-fan2">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Lambda Heater</span><span class="bool-badge off" id="sw-lambda-heater">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Primary Trigger Sync</span><span class="bool-badge off" id="sw-primary-sync">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Secondary Trigger Sync</span><span class="bool-badge off" id="sw-secondary-sync">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Injector 1-4 Driver</span><span class="bool-badge off" id="sw-inj14">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Injector 2-3 Driver</span><span class="bool-badge off" id="sw-inj23">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Engine Bay Vent</span><span class="bool-badge off" id="sw-vent">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Hill Assist</span><span class="bool-badge off" id="sw-hill">OFF</span></div>
+    <div class="bool-row"><span class="bool-label">Cruise Control</span><span class="bool-badge off" id="sw-cruise">OFF</span></div>
+  </div>
+
+</div><!-- /tab-dashboard -->
+
+<!-- ═══════════════ DEBUG TAB ═══════════════ -->
+<div id="tab-debug" class="tab">
+  <div class="debug-grid">
+
+    <!-- Connection info -->
+    <div class="debug-panel" style="max-height:200px">
+      <div class="debug-panel-header">Connection</div>
+      <div class="debug-panel-body">
+        <div class="info-row"><span class="k">Status</span><span class="v" id="dbg-connected">—</span></div>
+        <div class="info-row"><span class="k">ECU Type</span><span class="v" id="dbg-ecu">—</span></div>
+        <div class="info-row"><span class="k">Serial Port</span><span class="v" id="dbg-port">—</span></div>
+        <div class="info-row"><span class="k">Agent Version</span><span class="v" id="dbg-version">—</span></div>
+        <div class="info-row"><span class="k">Last Update</span><span class="v" id="dbg-ts">—</span></div>
+        <div class="info-row"><span class="k">WS State</span><span class="v" id="dbg-ws">—</span></div>
+      </div>
+    </div>
+
+    <!-- Available ports -->
+    <div class="debug-panel" style="max-height:200px">
+      <div class="debug-panel-header">Discovered Serial Ports</div>
+      <div class="debug-panel-body" id="dbg-ports-list">—</div>
+    </div>
+
+    <!-- Log lines -->
+    <div class="debug-panel" style="grid-column: span 2;">
+      <div class="debug-panel-header">
+        Agent Log
+        <button class="btn-clear" onclick="document.getElementById('log-container').innerHTML=''">Clear</button>
+      </div>
+      <div class="debug-panel-body" id="log-container"></div>
+    </div>
+
+    <!-- Raw JSON -->
+    <div class="debug-panel" style="grid-column: span 2;">
+      <div class="debug-panel-header">Raw State (latest WS frame)</div>
+      <div class="debug-panel-body"><pre id="raw-json">Waiting for data…</pre></div>
+    </div>
+
+  </div>
+</div><!-- /tab-debug -->
+
+<script>
+// ── Tab switching ──────────────────────────────────────────────
+function showTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+function fmt(v, decimals) {
+  if (v === undefined || v === null) return '—';
+  if (typeof decimals === 'number') return Number(v).toFixed(decimals);
+  return String(v);
+}
+function fmtTemp(v) {
+  if (v === undefined || v === null) return '—';
+  return Number(v).toFixed(0);
+}
+
+function setBool(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const on = val === 1 || val === true;
+  el.textContent = on ? 'ON' : 'OFF';
+  el.className = 'bool-badge ' + (on ? 'on' : 'off');
+}
+
+function setMetric(id, val, decimals) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = fmt(val, decimals);
+}
+
+function setBar(id, val, max) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.width = Math.min(100, (val / max) * 100).toFixed(1) + '%';
+}
+
+function tempClass(v) {
+  if (v === undefined || v === null) return '';
+  if (v > 110) return 'val-crit';
+  if (v > 95)  return 'val-hot';
+  if (v > 80)  return 'val-warn';
+  return '';
+}
+
+// ── Render ─────────────────────────────────────────────────────
+function render(d) {
+  const ecu = d.ecuData || {};
+
+  // Header
+  document.getElementById('ecu-badge').textContent = 'ECU: ' + (d.ecuType || '—');
+  document.getElementById('port-badge').textContent = 'PORT: ' + (d.selectedSerialPort || '—');
+  document.getElementById('ts-badge').textContent = d.timestamp ? new Date(d.timestamp).toLocaleTimeString() : '';
+
+  // Status dot
+  const dot  = document.getElementById('status-dot');
+  const stxt = document.getElementById('status-text');
+  if (d.connected) {
+    dot.className = 'status-dot connected';
+    stxt.textContent = 'CONNECTED';
+  } else {
+    dot.className = 'status-dot error';
+    stxt.textContent = 'DISCONNECTED';
+  }
+
+  // Banners
+  const alertEl = document.getElementById('alert-banner');
+  const errorEl = document.getElementById('error-banner');
+  if (d.alert) {
+    document.getElementById('alert-msg').textContent = d.alert;
+    alertEl.style.display = 'flex';
+    setTimeout(() => alertEl.style.display = 'none', 5000);
+  }
+  if (d.error) {
+    document.getElementById('error-msg').textContent = d.error;
+    errorEl.style.display = 'flex';
+  } else {
+    errorEl.style.display = 'none';
+  }
+
+  // Faults
+  const faultStrip = document.getElementById('fault-strip');
+  const faults = d.faults || [];
+  if (faults.length === 0 || (faults.length === 1 && faults[0] === 'not-checked-yet')) {
+    faultStrip.innerHTML = '<span class="fault-ok">NO FAULTS</span>';
+  } else {
+    faultStrip.innerHTML = faults.map(f => `<span class="fault-tag">${f.replace(/_/g,' ')}</span>`).join('');
+  }
+
+  // ── Engine ──
+  const rpm = ecu.rpm;
+  setMetric('val-rpm', rpm, 0);
+  setBar('bar-rpm', rpm, 7000);
+
+  const coolant = ecu.coolant_temp;
+  const coolantEl = document.getElementById('val-coolant');
+  if (coolantEl) {
+    coolantEl.textContent = fmtTemp(coolant);
+    coolantEl.className = 'value ' + tempClass(coolant);
+  }
+  setBar('bar-coolant', coolant !== undefined ? coolant + 40 : 0, 140);
+
+  setMetric('val-iat',           ecu.intake_air_temp,  0);
+  setMetric('val-ambient',       ecu.ambient_temp,     0);
+  setMetric('val-fuel-rail-temp',ecu.fuel_rail_temp,   0);
+  setMetric('val-oil-temp',      ecu.oil_temp,         1);
+
+  // ── Fuelling ──
+  setMetric('val-map',          ecu.map_sensor_kpa,            1);
+  setBar('bar-map', ecu.map_sensor_kpa, 255);
+
+  setMetric('val-throttle-pot', ecu.throttle_pot_voltage,      2);
+  setBar('bar-throttle', ecu.throttle_pot_voltage !== undefined ? ecu.throttle_pot_voltage * 200 : 0, 200);
+
+  setMetric('val-throttle-angle',ecu.throttle_angle,           1);
+  setMetric('val-lambda-mv',    ecu.lambda_mv,                 0);
+  setMetric('val-lambda-freq',  ecu.lambda_sensor_frequency,   0);
+  setMetric('val-lambda-duty',  ecu.lambda_sensor_duty_cycle,  0);
+  setMetric('val-long-trim',    ecu.long_term_trim,            0);
+  setMetric('val-short-trim',   ecu.short_term_trim_percent,   1);
+  setMetric('val-afr',          ecu.estimate_air_fuel || ecu.air_fuel_ratio, 2);
+  setMetric('val-fuel-feedback',ecu.fuelling_feedback_percent, 1);
+  setMetric('val-o2',           ecu.o2_mv,                     0);
+
+  // ── Ignition ──
+  setMetric('val-ign-advance',  ecu.ignition_advance,          1);
+  setMetric('val-ign-offset',   ecu.ignition_advance_offset,   0);
+  setMetric('val-coil-time',    ecu.coil_time_microseconds,    0);
+  setMetric('val-coil1',        ecu.coil_1_charge_time,        3);
+  setMetric('val-coil2',        ecu.coil_2_charge_time,        3);
+
+  // ── Idle ──
+  const idleValve = ecu.idle_valve_position || ecu.idle_valve_pos;
+  setMetric('val-idle-valve', idleValve, 0);
+  setBar('bar-idle-valve', idleValve, 180);
+
+  setMetric('val-idle-set',     ecu.idle_setpoint,             0);
+  setMetric('val-idle-dev',     ecu.idle_speed_deviation,      0);
+  setMetric('val-idle-err',     ecu.idle_error,                0);
+  setMetric('val-idle-base',    ecu.idle_base_position,        0);
+  setMetric('val-idle-timing',  ecu.idle_timing_offset,        1);
+  setMetric('val-idle-adj',     ecu.idle_adjuster_rpm,         0);
+
+  // ── Injectors ──
+  setMetric('val-inj1', ecu.injector_1_pw, 0);
+  setMetric('val-inj2', ecu.injector_2_pw, 0);
+  setMetric('val-inj3', ecu.injector_3_pw, 0);
+  setMetric('val-inj4', ecu.injector_4_pw, 0);
+
+  // ── Electrical ──
+  const bat = ecu.battery_voltage;
+  const batEl = document.getElementById('val-battery');
+  if (batEl) {
+    batEl.textContent = bat !== undefined ? Number(bat).toFixed(1) : '—';
+    batEl.className = 'value ' + (bat !== undefined && bat < 11.5 ? 'val-crit' : bat !== undefined && bat < 12.5 ? 'val-warn' : '');
+  }
+  setBar('bar-battery', bat !== undefined ? (bat - 10) : 0, 6);
+
+  setMetric('val-speed',  ecu.vehicle_speed, 0);
+  setMetric('val-crank',  ecu.crank_counter, 0);
+  setMetric('val-cam',    ecu.cam_percent,   0);
+  setMetric('val-rpm-err',ecu.rpm_error,     0);
+
+  // ── Switches & Relays ──
+  setBool('sw-idle',           ecu.idle_switch);
+  setBool('sw-closed-loop',    ecu.closed_loop);
+  setBool('sw-ignition',       ecu.ignition);
+  setBool('sw-park',           ecu.park_or_neutral_switch !== undefined ? (ecu.park_or_neutral_switch === 0 ? 1 : 0) : undefined);
+  setBool('sw-throttle',       ecu.throttle_switch);
+  setBool('sw-ac-btn',         ecu.ac_button);
+  setBool('sw-fan1',           ecu.fan_1_control);
+  setBool('sw-fan2',           ecu.fan_2_control);
+  setBool('sw-lambda-heater',  ecu.lambda_heater_relay);
+  setBool('sw-primary-sync',   ecu.primary_trigger_sync);
+  setBool('sw-secondary-sync', ecu.secondary_trigger_sync);
+  setBool('sw-inj14',          ecu.injector_1_4_driver);
+  setBool('sw-inj23',          ecu.injector_2_3_driver);
+  setBool('sw-vent',           ecu.engine_bay_vent_relay);
+  setBool('sw-hill',           ecu.hill_assist);
+  setBool('sw-cruise',         ecu.cruise_control);
+
+  // ── Debug tab ──
+  document.getElementById('dbg-connected').textContent = d.connected ? 'Connected' : 'Disconnected';
+  document.getElementById('dbg-ecu').textContent = d.ecuType || '—';
+  document.getElementById('dbg-port').textContent = d.selectedSerialPort || '—';
+  document.getElementById('dbg-version').textContent = d.agentVersion || '—';
+  document.getElementById('dbg-ts').textContent = d.timestamp || '—';
+
+  // Ports list
+  const ports = d.serialPorts || [];
+  const portsList = document.getElementById('dbg-ports-list');
+  if (ports.length === 0) {
+    portsList.innerHTML = '<span style="color:var(--muted)">None discovered</span>';
+  } else {
+    portsList.innerHTML = ports.map(p => {
+      const sel = p === d.selectedSerialPort;
+      return `<div class="info-row"><span class="k">${p}</span><span class="v" style="${sel ? 'color:var(--green)' : ''}">${sel ? 'selected' : ''}</span></div>`;
+    }).join('');
+  }
+
+  // Log lines
+  const logContainer = document.getElementById('log-container');
+  const lines = d.logLines || [];
+  if (lines.length > 0) {
+    // Only append new lines
+    const current = logContainer.children.length;
+    for (let i = current; i < lines.length; i++) {
+      const div = document.createElement('div');
+      div.className = 'log-line';
+      div.textContent = lines[i];
+      logContainer.appendChild(div);
+    }
+    // Auto-scroll
+    logContainer.scrollTop = logContainer.scrollHeight;
+  }
+
+  // Raw JSON
+  document.getElementById('raw-json').textContent = JSON.stringify(d, null, 2);
+}
+
+// ── WebSocket ──────────────────────────────────────────────────
+let ws = null;
+let reconnectTimer = null;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws');
+
+  document.getElementById('dbg-ws').textContent = 'Connecting…';
+
+  ws.onopen = () => {
+    document.getElementById('dbg-ws').textContent = 'Open';
+    poll();
+  };
+
+  ws.onmessage = (evt) => {
+    try {
+      const data = JSON.parse(evt.data);
+      render(data);
+    } catch(e) {
+      console.error('Parse error', e);
+    }
+    // Schedule next poll
+    setTimeout(poll, 500);
+  };
+
+  ws.onerror = () => {
+    document.getElementById('dbg-ws').textContent = 'Error';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('dbg-ws').textContent = 'Closed — reconnecting…';
+    document.getElementById('status-dot').className = 'status-dot';
+    document.getElementById('status-text').textContent = 'DISCONNECTED';
+    reconnectTimer = setTimeout(connect, 2000);
+  };
+}
+
+function poll() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send('.');
+  }
+}
+
+connect();
+</script>
+</body>
+</html>

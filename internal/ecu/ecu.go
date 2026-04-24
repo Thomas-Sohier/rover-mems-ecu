@@ -3,27 +3,74 @@ package ecu
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 )
 
-// State holds all runtime ECU data that the web server needs to read.
+// State holds all runtime ECU data shared between ECU handlers and the web server.
 type State struct {
 	mu sync.RWMutex
 
+	// ECU connection state
 	Connected   bool
 	Faults      []string
 	Data        map[string]float32
 	Alert       string
 	Error       string
 	UserCommand string
+
+	// Runtime configuration (can be changed via web UI)
+	EcuType            string
+	SelectedSerialPort string
+	SerialPorts        []string
+
+	// Static configuration
+	DebugMode    bool
+	AgentVersion string
+
+	// Logging
+	LogLines []string
 }
 
 // NewState returns an initialized State.
 func NewState() *State {
 	return &State{
-		Faults: []string{"not-checked-yet"},
-		Data:   make(map[string]float32),
+		Faults:       []string{"not-checked-yet"},
+		Data:         make(map[string]float32),
+		SerialPorts:  []string{},
+		LogLines:     []string{},
+		AgentVersion: "1.4.3",
 	}
+}
+
+// LogDebug appends a debug message to LogLines if DebugMode is enabled.
+func (s *State) LogDebug(args ...interface{}) {
+	if !s.DebugMode {
+		return
+	}
+	msg := fmt.Sprint(args...)
+	fmt.Println(msg)
+	s.mu.Lock()
+	s.LogLines = append(s.LogLines, msg)
+	if len(s.LogLines) > 100 {
+		s.LogLines = s.LogLines[len(s.LogLines)-100:]
+	}
+	s.mu.Unlock()
+}
+
+// LogDebugf appends a formatted debug message.
+func (s *State) LogDebugf(format string, args ...interface{}) {
+	if !s.DebugMode {
+		return
+	}
+	msg := fmt.Sprintf(format, args...)
+	fmt.Println(msg)
+	s.mu.Lock()
+	s.LogLines = append(s.LogLines, msg)
+	if len(s.LogLines) > 100 {
+		s.LogLines = s.LogLines[len(s.LogLines)-100:]
+	}
+	s.mu.Unlock()
 }
 
 // Lock acquires the write lock.

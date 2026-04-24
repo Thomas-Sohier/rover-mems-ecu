@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package serial
 
 import (
 	"os"
@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-func nativeGetPortsList() ([]string, error) {
+// GetPortsList returns available serial ports on the system.
+func GetPortsList() ([]string, error) {
 	output := []string {}
 
     dir, err := os.Open("/dev/")

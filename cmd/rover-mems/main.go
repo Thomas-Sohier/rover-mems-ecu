@@ -1,53 +1,41 @@
 package main
 
-// useful: https://github.com/bugst/go-serial/blob/master/serial_windows.go
-
 import (
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
+
+	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/serial"
+	"rover-mems-agent/internal/web"
+
+	// Import ECU implementations for their init() registration
+	_ "rover-mems-agent/internal/ecu/fake"
+	_ "rover-mems-agent/internal/ecu/mems19"
+	_ "rover-mems-agent/internal/ecu/mems1x"
+	_ "rover-mems-agent/internal/ecu/mems2j"
+	_ "rover-mems-agent/internal/ecu/mems3"
+	_ "rover-mems-agent/internal/ecu/rc5"
 )
 
 var (
-	globalConnected          = false
-	globalFaults             = []string{"not-checked-yet"}
-	globalSerialPorts        = []string{}
-	globalSelectedSerialPort = ""
-	globalEcuType            = ""
-	globalUserCommand        = ""
-	globalAlert              = "" // pops up on web UI then closes itself
-	globalError              = "" // pops up on web UI and stays until closed
-	globalDebugMode          = false
-	globalHTTPPort           = ":8080"
-
-	globalDataOutput     = map[string]float32{}
-	globalDataOutputLock = sync.RWMutex{}
-
-	globalAgentVersion = "1.4.3"
-
-	globalLogLines = []string{}
-
-	outgoingData chan string // for pushing data out of the websocket
-
-	serialReadChannel = make(chan byte, 1024)
+	state    *ecu.State
+	httpPort string
 )
 
-// main is the entry point of the application.
-// It handles flag parsing, agent initialization, signal handling setup, and the main event loop.
 func main() {
+	state = ecu.NewState()
 	parseFlags()
 	initializeAgent()
-	go runWebserver(globalHTTPPort)
+	go web.NewServer(state).Run(httpPort)
 	stopChan := setupGracefulShutdown()
 	runEventLoop(stopChan)
 }
 
-// parseFlags parses command-line arguments to configure the agent.
 func parseFlags() {
 	serialPortFlag := flag.String("serialport", "", "Serial port to use")
 	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3, fake)")
@@ -56,124 +44,104 @@ func parseFlags() {
 	flag.Parse()
 
 	if *serialPortFlag != "" {
-		globalSelectedSerialPort = *serialPortFlag
+		state.SelectedSerialPort = *serialPortFlag
 	}
 	if *ecuTypeFlag != "" {
-		globalEcuType = *ecuTypeFlag
+		state.EcuType = *ecuTypeFlag
 	}
 	if *modeFlag == "debug" {
-		globalDebugMode = true
+		state.DebugMode = true
 	}
-	globalHTTPPort = fmt.Sprintf(":%d", *portFlag)
+	httpPort = fmt.Sprintf(":%d", *portFlag)
 }
 
-// initializeAgent sets up initial state, logging, and data channels.
 func initializeAgent() {
-	outgoingData = make(chan string, 1000)
-	fmt.Println("################################################################################")
-	fmt.Println("# Rover MEMS Diagnostic Agent version " + globalAgentVersion)
-	fmt.Println("################################################################################")
-	logDebug("Debug mode enabled")
-	logDebug("Selected serial port: " + globalSelectedSerialPort)
-	logDebug("Selected ECU type: " + globalEcuType)
+	state.LogDebug("################################################################################")
+	state.LogDebug("# Rover MEMS Diagnostic Agent version " + state.AgentVersion)
+	state.LogDebug("################################################################################")
+	state.LogDebug("Debug mode enabled")
+	state.LogDebug("Selected serial port: " + state.SelectedSerialPort)
+	state.LogDebug("Selected ECU type: " + state.EcuType)
 }
 
-// setupGracefulShutdown configures a channel to receive OS signals for termination.
-// It returns a channel that will receive os.Interrupt or syscall.SIGTERM signals.
 func setupGracefulShutdown() chan os.Signal {
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
-	
+
 	go func() {
 		<-stopChan
-		fmt.Println("\nShutting down immediately due to OS signal...")
+		state.LogDebug("\nShutting down immediately due to OS signal...")
 		os.Exit(0)
 	}()
-	
+
 	return stopChan
 }
 
-// runEventLoop manages the main application lifecycle.
-// It attempts to connect to the ECU, then waits 1 second before retrying on failure.
-// Signal handling is checked between each attempt.
 func runEventLoop(stopChan chan os.Signal) {
 	for {
-		// Check for shutdown before each attempt
 		select {
 		case <-stopChan:
-			logDebug("Shutting down...")
+			state.LogDebug("Shutting down...")
 			return
 		default:
 		}
 
 		attemptConnection()
 
-		// Wait 1 second before retrying, but honour shutdown immediately
 		select {
 		case <-stopChan:
-			logDebug("Shutting down...")
+			state.LogDebug("Shutting down...")
 			return
 		case <-time.After(1 * time.Second):
 		}
 	}
 }
 
-// attemptConnection tries to establish a connection to the ECU.
-// If it fails, it logs the error and updates the global error state.
 func attemptConnection() {
 	err := connectLoop()
 	if err != nil {
-		logDebug(err)
-		globalDataOutputLock.Lock()
-		globalError = err.Error()
-		globalDataOutputLock.Unlock()
+		state.LogDebug(err.Error())
+		state.Lock()
+		state.Error = err.Error()
+		state.Unlock()
 	}
 }
 
-// connectLoop handles the logic for discovering serial ports and connecting to the specific ECU type.
-// It returns an error if connection fails or if configuration is invalid, nil on clean exit.
 func connectLoop() error {
-	// Mark as disconnected at the start of each attempt so the UI reflects reality
-	globalDataOutputLock.Lock()
-	globalConnected = false
-	globalDataOutputLock.Unlock()
+	state.Lock()
+	state.Connected = false
+	ecuType := state.EcuType
+	state.Unlock()
 
-	if globalEcuType == "" {
-		return errors.New("No ECU type selected")
+	if ecuType == "" {
+		return errors.New("no ECU type selected")
 	}
 
-	// Fake mode: skip all serial port logic
-	if globalEcuType == "fake" {
-		return fakeEcuLoop()
+	// Fake mode: skip serial port logic
+	if ecuType == "fake" {
+		return runECU(ecuType, ecuType)
 	}
 
-	portList, err := nativeGetPortsList()
+	portList, err := serial.GetPortsList()
 	if err != nil {
 		return err
 	}
 
-	// Case: No ports found at all
 	if len(portList) == 0 {
-		logDebug("ERROR: No serial ports found. Please check device connections and drivers.")
-		os.Exit(1)
+		state.LogDebug("ERROR: No serial ports found. Please check device connections and drivers.")
+		return errors.New("no serial ports found")
 	}
 
-	globalDataOutputLock.Lock()
-	globalSerialPorts = portList
-	globalDataOutputLock.Unlock()
+	state.Lock()
+	state.SerialPorts = portList
+	selected := state.SelectedSerialPort
+	state.Unlock()
 
-	logDebug("Found the following ports that I can use:")
-	logDebug(portList)
+	state.LogDebug("Found ports:", portList)
 
 	portname := ""
 
-	// Determine which port to use
-	globalDataOutputLock.Lock()
-	selected := globalSelectedSerialPort
-	globalDataOutputLock.Unlock()
-
 	if selected != "" {
-		// User has selected a port
 		found := false
 		for _, p := range portList {
 			if p == selected {
@@ -181,53 +149,41 @@ func connectLoop() error {
 				break
 			}
 		}
-
 		if !found {
-			// Warn once per "session" implies we assume the user knows what they are doing,
-			// or the port is hidden. We log a warning and try anyway.
-			fmt.Printf("WARNING: Selected port '%s' not found in discovered list. Attempting to connect anyway...\n", selected)
+			state.LogDebug("WARNING: Selected port '%s' not found in discovered list. Attempting to connect anyway...\n", selected)
 		}
 		portname = selected
 	} else {
-		// No port selected
+		portname = portList[0]
 		if len(portList) == 1 {
-			portname = portList[0]
-			logDebug("Only found one port, auto-selecting: " + portname)
-
-			globalDataOutputLock.Lock()
-			globalSelectedSerialPort = portname
-			globalDataOutputLock.Unlock()
+			state.LogDebug("Only found one port, auto-selecting: " + portname)
 		} else {
-			// Multiple ports and none selected
-			// User requested: "if not set, log warn and then take first"
-			portname = portList[0]
-			fmt.Printf("WARNING: Multiple ports found and none selected. Defaulting to first available: %s\n", portname)
-
-			globalDataOutputLock.Lock()
-			globalSelectedSerialPort = portname
-			globalDataOutputLock.Unlock()
+			state.LogDebug("WARNING: Multiple ports found and none selected. Defaulting to first available: %s\n", portname)
 		}
+		state.Lock()
+		state.SelectedSerialPort = portname
+		state.Unlock()
 	}
 
-	logDebug("Using port: " + portname)
+	state.LogDebug("Using port: " + portname)
 
-	switch globalEcuType {
-	case "1.x":
-		_, err = readFirstBytesFromPortEcu1x(portname)
-	case "rc5":
-		_, err = readFirstBytesFromPortRc5(portname)
-	case "2J":
-		_, err = readFirstBytesFromPortTwoj(portname)
-	case "1.9":
-		_, err = readFirstBytesFromPortEcu19(portname)
-	case "3":
-		_, err = readFirstBytesFromPortEcu3(portname)
-	default:
-		return errors.New("Unknown ECU type set")
+	return runECU(ecuType, portname)
+}
+
+func runECU(ecuType, portname string) error {
+	cfg := ecu.Config{
+		DebugMode: state.DebugMode,
 	}
+
+	ecuInstance, err := ecu.Factory(ecuType, state, cfg)
 	if err != nil {
 		return err
 	}
+	defer ecuInstance.Close()
 
-	return nil
+	if err := ecuInstance.Connect(portname); err != nil {
+		return err
+	}
+
+	return ecuInstance.ReadData()
 }
