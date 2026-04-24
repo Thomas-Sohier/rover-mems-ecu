@@ -1,12 +1,16 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	_ "embed"
-	"io"
+	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -17,28 +21,38 @@ import (
 //go:embed dashboard.html
 var dashboardHTML []byte
 
+const (
+	// Time allowed to write a message to the peer.
+	writeWait = 10 * time.Second
+	// Time allowed to read the next message from the peer before assuming they disconnected.
+	idleTimeout = 60 * time.Second
+)
+
 // wsupgrader is configured once at package level.
-// CheckOrigin allows all origins (suitable for a local diagnostic tool).
+// FIX: Restricted CheckOrigin strictly to localhost for local usage security.
 var wsupgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		host := r.Host
+		// Allow strictly local loopback addresses
+		return strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") || host == "localhost"
+	},
 }
 
 // runWebserver starts the HTTP/WebSocket server on the given bind address (e.g. ":8080").
 func runWebserver(addr string) {
 	gin.SetMode(gin.ReleaseMode)
-	gin.DefaultWriter = io.Discard // silence Gin's request log in production
-
-	router := gin.Default()
-	router.Use(cors.Default())
+	router := gin.New()
+	router.Use(gin.Recovery())
+	corsConfig := cors.DefaultConfig()
+	corsConfig.AllowOrigins = []string{"http://localhost", "http://127.0.0.1"}
+	router.Use(cors.New(corsConfig))
 
 	// --- State read/write endpoints ---
 	api := router.Group("/api")
 	{
-		// Full state snapshot (also clears one-shot alert/error fields)
 		api.GET("", apiStateHandler)
-		// List discovered serial ports and currently selected one
 		api.GET("/ports", apiPortsHandler)
 	}
 
@@ -49,37 +63,46 @@ func runWebserver(addr string) {
 
 	// --- Legacy flat routes (kept for backwards compatibility) ---
 	router.GET("/ping", func(c *gin.Context) {
-		c.JSON(200, gin.H{"message": "pong"})
+		c.JSON(http.StatusOK, gin.H{"message": "pong"})
 	})
+
 	router.GET("/connected", func(c *gin.Context) {
 		globalDataOutputLock.RLock()
 		connected := globalConnected
 		globalDataOutputLock.RUnlock()
-		c.JSON(200, gin.H{"connected": connected})
+		c.JSON(http.StatusOK, gin.H{"connected": connected})
 	})
+
 	router.GET("/faults", func(c *gin.Context) {
 		globalDataOutputLock.RLock()
-		faults := globalFaults
+		jsonData, err := json.Marshal(gin.H{"faults": globalFaults})
 		globalDataOutputLock.RUnlock()
-		c.JSON(200, gin.H{"faults": faults})
+
+		if err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		c.Data(http.StatusOK, "application/json", jsonData)
 	})
 
 	// --- Configuration endpoints ---
-	router.GET("/ecu/:name", func(c *gin.Context) {
+	router.POST("/ecu/:name", func(c *gin.Context) {
 		name := c.Param("name")
 		globalDataOutputLock.Lock()
 		globalEcuType = name
 		globalDataOutputLock.Unlock()
 		c.String(http.StatusOK, "ECU type set to %s", name)
 	})
-	router.GET("/serialPort/:name", func(c *gin.Context) {
+
+	router.POST("/serialPort/:name", func(c *gin.Context) {
 		name := c.Param("name")
 		globalDataOutputLock.Lock()
 		globalSelectedSerialPort = name
 		globalDataOutputLock.Unlock()
 		c.String(http.StatusOK, "Serial port set to %s", name)
 	})
-	router.GET("/command/:name", func(c *gin.Context) {
+
+	router.POST("/command/:name", func(c *gin.Context) {
 		name := c.Param("name")
 		globalDataOutputLock.Lock()
 		globalUserCommand = name
@@ -92,13 +115,32 @@ func runWebserver(addr string) {
 		wsHandler(c.Writer, c.Request)
 	})
 
-	logDebug("Starting webserver on " + addr)
-	router.Run(addr)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: router,
+	}
+
+	go func() {
+		logDebug("Starting webserver on " + addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shutdown the server
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	logDebug("Shutting down webserver...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatal("Server forced to shutdown:", err)
+	}
 }
 
 // apiStateHandler returns the full agent state as JSON.
-// It atomically clears the one-shot alert and error fields so that
-// a second call does not repeat them.
 func apiStateHandler(c *gin.Context) {
 	globalDataOutputLock.Lock()
 	snapshot := gin.H{
@@ -111,24 +153,37 @@ func apiStateHandler(c *gin.Context) {
 		"ecuData":      globalDataOutput,
 		"agentVersion": globalAgentVersion,
 	}
+
+	// FIX: Marshal JSON INSIDE the lock. If ecuData is a map/slice, marshalling it
+	// outside the lock will cause a `concurrent map iteration` panic.
+	jsonData, err := json.Marshal(snapshot)
+
 	globalAlert = ""
 	globalError = ""
 	globalDataOutputLock.Unlock()
 
-	c.JSON(200, snapshot)
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	c.Data(http.StatusOK, "application/json", jsonData)
 }
 
-// apiPortsHandler returns the list of discovered serial ports and which one is selected.
+// apiPortsHandler returns the list of discovered serial ports.
 func apiPortsHandler(c *gin.Context) {
 	globalDataOutputLock.RLock()
-	ports := globalSerialPorts
-	selected := globalSelectedSerialPort
+	// FIX: Marshal inside lock to protect slices/maps
+	jsonData, err := json.Marshal(gin.H{
+		"ports":    globalSerialPorts,
+		"selected": globalSelectedSerialPort,
+	})
 	globalDataOutputLock.RUnlock()
 
-	c.JSON(200, gin.H{
-		"ports":    ports,
-		"selected": selected,
-	})
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	c.Data(http.StatusOK, "application/json", jsonData)
 }
 
 // wsHandler upgrades the HTTP connection to a WebSocket and enters the read/write loop.
@@ -138,7 +193,8 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		logDebug("Failed to upgrade WebSocket connection:", err)
 		return
 	}
-
+	defer conn.Close()
+	conn.SetReadLimit(2048)
 	for {
 		if err := wsIteration(conn); err != nil {
 			break
@@ -147,19 +203,20 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // wsIteration handles one request/response cycle on the WebSocket connection.
-// The browser sends "." to request a state snapshot; any other message is treated as a command.
 func wsIteration(conn *websocket.Conn) error {
+	// As long as the client sends "." before this timeout, the connection stays alive.
+	conn.SetReadDeadline(time.Now().Add(idleTimeout))
+
 	_, message, err := conn.ReadMessage()
 	if err != nil {
 		return err
 	}
 
-	var payload map[string]interface{}
+	var jsonData []byte
 
 	if strings.TrimSpace(string(message)) == "." {
-		// State request: snapshot everything under lock, then release before encoding
 		globalDataOutputLock.Lock()
-		payload = map[string]interface{}{
+		payload := map[string]interface{}{
 			"faults":             globalFaults,
 			"connected":          globalConnected,
 			"ecuType":            globalEcuType,
@@ -173,18 +230,24 @@ func wsIteration(conn *websocket.Conn) error {
 			"selectedSerialPort": globalSelectedSerialPort,
 			"logLines":           globalLogLines,
 		}
+
+		jsonData, err = json.Marshal(payload)
 		globalAlert = ""
 		globalError = ""
 		globalDataOutputLock.Unlock()
+
+		if err != nil {
+			return err
+		}
 	} else {
 		log.Printf("ws recv: %s", message)
-		payload = map[string]interface{}{"command": "worked"}
+		payload := map[string]interface{}{"command": "worked"}
+		jsonData, err = json.Marshal(payload)
+		if err != nil {
+			return err
+		}
 	}
 
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
+	conn.SetWriteDeadline(time.Now().Add(writeWait))
 	return conn.WriteMessage(websocket.TextMessage, jsonData)
 }

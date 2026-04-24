@@ -52,7 +52,7 @@ func parseFlags() {
 	serialPortFlag := flag.String("serialport", "", "Serial port to use")
 	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3, fake)")
 	modeFlag := flag.String("mode", "prod", "Operation mode: prod or debug")
-	httpPortFlag := flag.String("httpport", ":8080", "HTTP server bind address (e.g. :8080 or 0.0.0.0:9090)")
+	portFlag := flag.Int("port", 8080, "HTTP server port")
 	flag.Parse()
 
 	if *serialPortFlag != "" {
@@ -64,7 +64,7 @@ func parseFlags() {
 	if *modeFlag == "debug" {
 		globalDebugMode = true
 	}
-	globalHTTPPort = *httpPortFlag
+	globalHTTPPort = fmt.Sprintf(":%d", *portFlag)
 }
 
 // initializeAgent sets up initial state, logging, and data channels.
