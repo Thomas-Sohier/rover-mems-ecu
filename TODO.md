@@ -43,5 +43,5 @@ Findings from the code-quality pass, ranked. Severity: 🔴 major · 🟠 modera
 
 ## 🟢 Minor
 
-- [ ] **`fmt.Println` bypassing the logger.** `loop.go:88,196,211` (and a few others) write directly to stdout, ignoring `DebugMode` and never reaching `LogLines`/the web UI. Route through `state.LogDebug`.
+- [x] **`fmt.Println` bypassing the logger.** `loop.go:88,196,211` (and a few others) write directly to stdout, ignoring `DebugMode` and never reaching `LogLines`/the web UI. Route through `state.LogDebug`.
 - [ ] **`interface{}` over `any`.** `State.LogDebug`/`LogDebugf` (`ecu.go:50,65`) use `interface{}`; repo targets go 1.23 and `any` is the convention (mems2j already uses it).

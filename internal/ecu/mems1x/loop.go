@@ -85,7 +85,7 @@ func (m *MEMS1x) nextCommand(previousResponse byte) byte {
 			m.state.Lock()
 			m.state.UserCommand = ""
 			m.state.Unlock()
-			fmt.Println("> " + cmd)
+			m.state.LogDebug("> " + cmd)
 			return command
 		} else {
 			m.state.LogDebug("Unknown user command:", cmd)
@@ -199,7 +199,7 @@ READLOOP:
 		if len(buffer) >= 2 {
 			for key := range userCommands {
 				if buffer[0] == userCommands[key] {
-					fmt.Println("< " + key)
+					m.state.LogDebug("< " + key)
 					m.state.Lock()
 					m.state.Alert = "ECU accepted " + key
 					m.state.Unlock()
@@ -214,7 +214,7 @@ READLOOP:
 		switch buffer[0] {
 		case requestClearFaults:
 			if len(buffer) >= 2 && buffer[1] == 0x00 {
-				fmt.Println("< FAULTS CLEARED")
+				m.state.LogDebug("< FAULTS CLEARED")
 				m.state.Lock()
 				m.state.Alert = "ECU reports faults cleared"
 				m.state.Unlock()
