@@ -3,15 +3,15 @@
 package serial
 
 import (
-	"syscall"
 	"errors"
-  "golang.org/x/sys/windows"
-  "unsafe"
+	"golang.org/x/sys/windows"
+	"syscall"
+	"unsafe"
 )
 
 var (
-  modadvapi32 = windows.NewLazySystemDLL("advapi32.dll")
-  procRegEnumValueW       = modadvapi32.NewProc("RegEnumValueW")
+	modadvapi32       = windows.NewLazySystemDLL("advapi32.dll")
+	procRegEnumValueW = modadvapi32.NewProc("RegEnumValueW")
 )
 
 func regEnumValue(key syscall.Handle, index uint32, name *uint16, nameLen *uint32, reserved *uint32, class *uint16, value *uint16, valueLen *uint32) (regerrno error) {
@@ -21,7 +21,6 @@ func regEnumValue(key syscall.Handle, index uint32, name *uint16, nameLen *uint3
 	}
 	return
 }
-
 
 // GetPortsList returns available serial ports on the system.
 func GetPortsList() ([]string, error) {
@@ -51,7 +50,7 @@ func GetPortsList() ([]string, error) {
 		var name [1024]uint16
 		nameSize := uint32(len(name))
 		if regEnumValue(h, uint32(i), &name[0], &nameSize, nil, nil, &data[0], &dataSize) != nil {
-      return nil, errors.New("ErrorEnumeratingPorts")
+			return nil, errors.New("ErrorEnumeratingPorts")
 		}
 		list[i] = syscall.UTF16ToString(data[:])
 	}

@@ -21,9 +21,10 @@ func approx(got, want float32) bool {
 
 // build80 constructs a raw 0x80 frame with the given packetSize.
 // The returned slice has length packetSize+2:
-//   raw[0] = 0x80 (echo)
-//   raw[1] = packetSize
-//   raw[2..] = payload bytes (caller fills in what matters)
+//
+//	raw[0] = 0x80 (echo)
+//	raw[1] = packetSize
+//	raw[2..] = payload bytes (caller fills in what matters)
 func build80(packetSize int) []byte {
 	frame := make([]byte, packetSize+2)
 	frame[0] = 0x80
