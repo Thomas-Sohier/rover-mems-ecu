@@ -36,7 +36,7 @@ Findings from the code-quality pass, ranked. Severity: 🔴 major · 🟠 modera
 
 ## 🟠 Moderate
 
-- [ ] **`panic(err)` in library code.** `GetPortsList` (`internal/serial/ports_linux.go:17`) panics if `/dev/` can't be opened instead of returning the error it already declares. Return the error.
+- [x] **`panic(err)` in library code.** `GetPortsList` (`internal/serial/ports_linux.go:17`) panics if `/dev/` can't be opened instead of returning the error it already declares. Return the error.
 - [ ] **`log.Fatal` inside the web server.** `web/server.go:113,123` call `log.Fatal` on bind/shutdown failure, killing the whole agent (incl. the active ECU connection) from a goroutine. Surface the error instead of exiting the process.
 - [ ] **Ignored serial read errors.** 8 sites use `n, _ := sp.Read(...)` (mems1x, mems19, mems3, rc5, readwrite). A hard error (unplugged USB) returns `n=0, err!=nil` and the code spins to timeout. Distinguish a hard error from an empty read.
 - [ ] **gofmt failures.** `ports_linux.go`, `ports_windows.go`, `loop_test.go` have mixed tabs/spaces. Run `gofmt -w .`.

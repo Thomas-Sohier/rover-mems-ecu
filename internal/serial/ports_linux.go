@@ -3,6 +3,7 @@
 package serial
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,11 +15,11 @@ func GetPortsList() ([]string, error) {
 
     dir, err := os.Open("/dev/")
     if err != nil {
-        panic(err)
+        return nil, fmt.Errorf("open /dev/: %w", err)
     }
     defer dir.Close()
 
-    filepath.Walk(dir.Name(), func(path string, info os.FileInfo, err error) error {
+    if err := filepath.Walk(dir.Name(), func(path string, info os.FileInfo, err error) error {
         if err != nil {
             return err
         }
@@ -26,7 +27,9 @@ func GetPortsList() ([]string, error) {
         	output = append(output, "/dev/"+info.Name())
         }
         return nil
-    })
+    }); err != nil {
+        return nil, fmt.Errorf("walk /dev/: %w", err)
+    }
 
 	return output, nil
 }
