@@ -16,7 +16,22 @@ GOOS=linux GOARCH=amd64 go build -o rover-mems-linux-amd64 ./...
 ./rover-mems-agent -serialport /dev/ttyUSB0 -ecutype 1.9 -mode debug
 ```
 
-There are no tests in this repository.
+## Test & Lint
+
+CI (`.github/workflows/main.yml`) runs these before building; run them locally before pushing:
+
+```bash
+go test -race -shuffle=on ./...   # unit tests (same flags as CI)
+go vet ./...                      # static analysis
+
+# Linter — pinned to v1.64.8 (v2 rejects this repo's v1-style .golangci.yml):
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+golangci-lint run
+```
+
+`.golangci.yml` enables `errcheck` with `check-type-assertions: true`. Intentionally
+ignored serial read/write errors in K-line loops are whitelisted via `issues.exclude-rules`;
+add to that list rather than disabling the linter when a serial call's error is deliberately dropped.
 
 ## CLI Flags
 

@@ -45,6 +45,26 @@ go build -o rover-mems-agent ./...
 | `-ecutype`    | `1.x`, `1.9`, `2J`, `3`, `rc5`, `fake` | ECU variant                            |
 | `-mode`       | `prod` (default), `debug`              | `debug` enables byte-level logging     |
 
+### Testing & linting
+
+CI runs the unit tests and `golangci-lint` on every push and pull request. Run
+the same checks locally before pushing:
+
+```bash
+# Unit tests (same flags as CI)
+go test -race -shuffle=on ./...
+
+# Static analysis
+go vet ./...
+
+# Linter — install once, pinned to the version CI uses (v1.64.8):
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+golangci-lint run
+```
+
+> The pin matters: `golangci-lint` v2 uses an incompatible config format and
+> will reject the v1-style `.golangci.yml` in this repo.
+
 ### ARM builds
 
 Cross-compiling for ARM (e.g. Raspberry Pi) requires the pinned serial library
