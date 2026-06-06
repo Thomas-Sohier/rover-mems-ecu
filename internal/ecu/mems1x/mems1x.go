@@ -14,8 +14,10 @@ func init() {
 
 // MEMS1x handles MEMS 1.2, 1.3, 1.6 ECUs.
 type MEMS1x struct {
-	state *ecu.State
-	sp    sers.SerialPort
+	state         *ecu.State
+	sp            sers.SerialPort
+	gotKlineEcho  bool
+	lastKlineByte byte
 }
 
 // NewMEMS1x creates a new MEMS 1.x ECU handler.

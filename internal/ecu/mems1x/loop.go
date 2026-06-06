@@ -11,9 +11,6 @@ import (
 )
 
 var (
-	gotKlineEcho  = false
-	lastKlineByte = byte(0x00)
-
 	requestClearFaults            = byte(0xCC)
 	startTestRpmGauge             = byte(0x6B)
 	startTestLambdaHeater         = byte(0x19)
@@ -127,8 +124,8 @@ func (m *MEMS1x) nextCommand(previousResponse byte) byte {
 func (m *MEMS1x) send(sp sers.SerialPort, data byte) {
 	m.state.LogDebugf("Sending byte: %02X", data)
 	sp.Write([]byte{data})
-	gotKlineEcho = false
-	lastKlineByte = data
+	m.gotKlineEcho = false
+	m.lastKlineByte = data
 }
 
 // loop runs the MEMS 1.x request/response data loop until it errors or times out.
@@ -176,14 +173,14 @@ READLOOP:
 			continue
 		}
 
-		if kline && !gotKlineEcho {
-			if buffer[0] == lastKlineByte {
-				gotKlineEcho = true
+		if kline && !m.gotKlineEcho {
+			if buffer[0] == m.lastKlineByte {
+				m.gotKlineEcho = true
 				m.state.LogDebugf("K-line echo consumed: %02X (buffer remaining: %v)", buffer[0], buffer[1:])
 				buffer = buffer[1:]
 				continue
 			} else {
-				m.state.LogDebugf("Expected K-line echo %02X, got %02X", lastKlineByte, buffer[0])
+				m.state.LogDebugf("Expected K-line echo %02X, got %02X", m.lastKlineByte, buffer[0])
 			}
 		}
 
