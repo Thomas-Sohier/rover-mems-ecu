@@ -68,16 +68,11 @@ func (s *Server) Run(ctx context.Context, addr string) {
 	})
 
 	router.GET("/connected", func(c *gin.Context) {
-		s.state.RLock()
-		connected := s.state.Connected
-		s.state.RUnlock()
-		c.JSON(http.StatusOK, gin.H{"connected": connected})
+		c.JSON(http.StatusOK, gin.H{"connected": s.state.Snapshot().Connected})
 	})
 
 	router.GET("/faults", func(c *gin.Context) {
-		s.state.RLock()
-		jsonData, err := json.Marshal(gin.H{"faults": s.state.Faults})
-		s.state.RUnlock()
+		jsonData, err := json.Marshal(gin.H{"faults": s.state.Snapshot().Faults})
 		if err != nil {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
@@ -87,25 +82,19 @@ func (s *Server) Run(ctx context.Context, addr string) {
 
 	router.POST("/ecu/:name", func(c *gin.Context) {
 		name := c.Param("name")
-		s.state.Lock()
-		s.state.EcuType = name
-		s.state.Unlock()
+		s.state.SetEcuType(name)
 		c.String(http.StatusOK, "ECU type set to %s", name)
 	})
 
 	router.POST("/serialPort/:name", func(c *gin.Context) {
 		name := c.Param("name")
-		s.state.Lock()
-		s.state.SelectedSerialPort = name
-		s.state.Unlock()
+		s.state.SetSelectedSerialPort(name)
 		c.String(http.StatusOK, "Serial port set to %s", name)
 	})
 
 	router.POST("/command/:name", func(c *gin.Context) {
 		name := c.Param("name")
-		s.state.Lock()
-		s.state.UserCommand = name
-		s.state.Unlock()
+		s.state.SetUserCommand(name)
 		c.String(http.StatusOK, "User command accepted %s", name)
 	})
 
@@ -136,21 +125,18 @@ func (s *Server) Run(ctx context.Context, addr string) {
 }
 
 func (s *Server) apiStateHandler(c *gin.Context) {
-	s.state.Lock()
-	snapshot := gin.H{
-		"faults":       s.state.Faults,
-		"connected":    s.state.Connected,
-		"ecuType":      s.state.EcuType,
-		"userCommand":  s.state.UserCommand,
-		"alert":        s.state.Alert,
-		"error":        s.state.Error,
-		"ecuData":      s.state.Data,
-		"agentVersion": s.state.AgentVersion,
-	}
-	jsonData, err := json.Marshal(snapshot)
-	s.state.Alert = ""
-	s.state.Error = ""
-	s.state.Unlock()
+	snap := s.state.Snapshot()
+	alert, errMsg := s.state.ConsumeAlertError()
+	jsonData, err := json.Marshal(gin.H{
+		"faults":       snap.Faults,
+		"connected":    snap.Connected,
+		"ecuType":      snap.EcuType,
+		"userCommand":  snap.UserCommand,
+		"alert":        alert,
+		"error":        errMsg,
+		"ecuData":      snap.Data,
+		"agentVersion": snap.AgentVersion,
+	})
 
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -160,12 +146,11 @@ func (s *Server) apiStateHandler(c *gin.Context) {
 }
 
 func (s *Server) apiPortsHandler(c *gin.Context) {
-	s.state.RLock()
+	snap := s.state.Snapshot()
 	jsonData, err := json.Marshal(gin.H{
-		"ports":    s.state.SerialPorts,
-		"selected": s.state.SelectedSerialPort,
+		"ports":    snap.SerialPorts,
+		"selected": snap.SelectedSerialPort,
 	})
-	s.state.RUnlock()
 
 	if err != nil {
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -200,25 +185,23 @@ func (s *Server) wsIteration(conn *websocket.Conn) error {
 	var jsonData []byte
 
 	if strings.TrimSpace(string(message)) == "." {
-		s.state.Lock()
+		snap := s.state.Snapshot()
+		alert, errMsg := s.state.ConsumeAlertError()
 		payload := map[string]interface{}{
-			"faults":             s.state.Faults,
-			"connected":          s.state.Connected,
-			"ecuType":            s.state.EcuType,
-			"userCommand":        s.state.UserCommand,
-			"alert":              s.state.Alert,
-			"error":              s.state.Error,
-			"ecuData":            s.state.Data,
-			"agentVersion":       s.state.AgentVersion,
+			"faults":             snap.Faults,
+			"connected":          snap.Connected,
+			"ecuType":            snap.EcuType,
+			"userCommand":        snap.UserCommand,
+			"alert":              alert,
+			"error":              errMsg,
+			"ecuData":            snap.Data,
+			"agentVersion":       snap.AgentVersion,
 			"timestamp":          time.Now().String(),
-			"serialPorts":        s.state.SerialPorts,
-			"selectedSerialPort": s.state.SelectedSerialPort,
-			"logLines":           s.state.LogLines,
+			"serialPorts":        snap.SerialPorts,
+			"selectedSerialPort": snap.SelectedSerialPort,
+			"logLines":           snap.LogLines,
 		}
 		jsonData, err = json.Marshal(payload)
-		s.state.Alert = ""
-		s.state.Error = ""
-		s.state.Unlock()
 
 		if err != nil {
 			return err

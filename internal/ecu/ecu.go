@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 )
 
@@ -81,6 +83,76 @@ func (s *State) Unlock() { s.mu.Unlock() }
 // RLock acquires the read lock.
 func (s *State) RLock()   { s.mu.RLock() }
 func (s *State) RUnlock() { s.mu.RUnlock() }
+
+// Snapshot is a consistent, copied view of State for read-only consumers
+// (the web layer). Slices and the map are deep-copied so callers can use
+// them without holding the lock.
+type Snapshot struct {
+	Connected          bool
+	Faults             []string
+	Data               map[string]float32
+	Alert              string
+	Error              string
+	UserCommand        string
+	EcuType            string
+	SelectedSerialPort string
+	SerialPorts        []string
+	AgentVersion       string
+	LogLines           []string
+}
+
+// Snapshot returns a consistent, copied view of the State under the read lock.
+// It does not mutate the State (in particular it does not consume Alert/Error).
+func (s *State) Snapshot() Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return Snapshot{
+		Connected:          s.Connected,
+		Faults:             slices.Clone(s.Faults),
+		Data:               maps.Clone(s.Data),
+		Alert:              s.Alert,
+		Error:              s.Error,
+		UserCommand:        s.UserCommand,
+		EcuType:            s.EcuType,
+		SelectedSerialPort: s.SelectedSerialPort,
+		SerialPorts:        slices.Clone(s.SerialPorts),
+		AgentVersion:       s.AgentVersion,
+		LogLines:           slices.Clone(s.LogLines),
+	}
+}
+
+// ConsumeAlertError reads and clears the Alert and Error fields, returning their
+// previous values. Alerts and errors are one-shot: they are reported once to the
+// consumer and consuming them clears them so they are not reported again.
+func (s *State) ConsumeAlertError() (alert, errMsg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	alert, errMsg = s.Alert, s.Error
+	s.Alert = ""
+	s.Error = ""
+	return alert, errMsg
+}
+
+// SetEcuType sets the selected ECU type.
+func (s *State) SetEcuType(v string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.EcuType = v
+}
+
+// SetSelectedSerialPort sets the selected serial port.
+func (s *State) SetSelectedSerialPort(v string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SelectedSerialPort = v
+}
+
+// SetUserCommand sets the pending user command.
+func (s *State) SetUserCommand(v string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.UserCommand = v
+}
 
 // ECU is the interface that all ECU implementations must satisfy.
 type ECU interface {
