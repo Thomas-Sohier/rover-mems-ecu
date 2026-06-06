@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,12 +29,14 @@ var (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	state = ecu.NewState()
 	parseFlags()
 	initializeAgent()
-	go web.NewServer(state).Run(httpPort)
-	stopChan := setupGracefulShutdown()
-	runEventLoop(stopChan)
+	go web.NewServer(state).Run(ctx, httpPort)
+	runEventLoop(ctx)
 }
 
 func parseFlags() {
@@ -64,23 +67,10 @@ func initializeAgent() {
 	state.LogDebug("Selected ECU type: " + state.EcuType)
 }
 
-func setupGracefulShutdown() chan os.Signal {
-	stopChan := make(chan os.Signal, 1)
-	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-stopChan
-		state.LogDebug("\nShutting down immediately due to OS signal...")
-		os.Exit(0)
-	}()
-
-	return stopChan
-}
-
-func runEventLoop(stopChan chan os.Signal) {
+func runEventLoop(ctx context.Context) {
 	for {
 		select {
-		case <-stopChan:
+		case <-ctx.Done():
 			state.LogDebug("Shutting down...")
 			return
 		default:
@@ -89,7 +79,7 @@ func runEventLoop(stopChan chan os.Signal) {
 		attemptConnection()
 
 		select {
-		case <-stopChan:
+		case <-ctx.Done():
 			state.LogDebug("Shutting down...")
 			return
 		case <-time.After(1 * time.Second):

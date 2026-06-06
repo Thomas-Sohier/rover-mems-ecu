@@ -7,10 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"rover-mems-agent/internal/ecu"
@@ -48,7 +45,7 @@ func NewServer(state *ecu.State) *Server {
 }
 
 // Run starts the HTTP/WebSocket server on the given bind address.
-func (s *Server) Run(addr string) {
+func (s *Server) Run(ctx context.Context, addr string) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -128,9 +125,7 @@ func (s *Server) Run(addr string) {
 		}
 	}()
 
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	<-ctx.Done()
 	s.state.LogDebug("Shutting down webserver...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
