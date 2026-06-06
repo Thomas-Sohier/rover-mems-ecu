@@ -270,8 +270,8 @@ func (m *MEMS1x) parseData80(data []byte) {
 	m.state.Data["fuel_rail_temp"] = float32(data[6]) - 55
 	m.state.Data["map_sensor_kpa"] = float32(data[7])
 	m.state.Data["battery_voltage"] = float32(data[8]) / 10
-	m.state.Data["throttle_pot_voltage"] = float32(data[9]) / 200
-	m.state.Data["idle_switch"] = float32((int(data[10]) & 0x00001000) >> 3)
+	m.state.Data["throttle_pot_voltage"] = float32(data[9]) / 50
+	m.state.Data["idle_switch"] = float32((int(data[10]) & 0x10) >> 4)
 	m.state.Data["park_or_neutral_switch"] = float32(data[12])
 
 	if ((int(data[13]) >> 0) & 1) > 0 {
@@ -334,7 +334,7 @@ func (m *MEMS1x) parseData80(data []byte) {
 	}
 	if packetSize > 0x16 {
 		m.state.Data["ignition_advance_raw"] = float32(data[0x16])
-		m.state.Data["ignition_advance"] = float32(data[0x16] / 2)
+		m.state.Data["ignition_advance"] = float32(data[0x16])/2 - 24
 	}
 	if packetSize > 0x18 {
 		coilTime := int(data[0x17]) << 8
