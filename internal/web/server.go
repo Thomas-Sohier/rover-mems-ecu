@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -110,7 +109,7 @@ func (s *Server) Run(ctx context.Context, addr string) {
 	go func() {
 		s.state.LogDebug("Starting webserver on " + addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("listen: %s\n", err)
+			s.state.LogDebugf("listen: %s", err)
 		}
 	}()
 
@@ -120,7 +119,7 @@ func (s *Server) Run(ctx context.Context, addr string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+		s.state.LogDebugf("Server forced to shutdown: %s", err)
 	}
 }
 
