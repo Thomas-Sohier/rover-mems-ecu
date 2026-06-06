@@ -338,19 +338,6 @@ func (r *RC5) parseFaults(buffer []byte) {
 	r.state.Unlock()
 }
 
-func (r *RC5) GetFaults() []string {
-	r.state.RLock()
-	defer r.state.RUnlock()
-	return r.state.Faults
-}
-
-func (r *RC5) SendCommand(cmd string) error {
-	r.state.Lock()
-	r.state.UserCommand = cmd
-	r.state.Unlock()
-	return nil
-}
-
 func (r *RC5) Close() error {
 	r.state.Lock()
 	r.state.Connected = false

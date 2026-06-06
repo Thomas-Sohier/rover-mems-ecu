@@ -161,19 +161,6 @@ func (f *FakeECU) ReadData() error {
 	return nil
 }
 
-func (f *FakeECU) GetFaults() []string {
-	f.state.RLock()
-	defer f.state.RUnlock()
-	return f.state.Faults
-}
-
-func (f *FakeECU) SendCommand(cmd string) error {
-	f.state.Lock()
-	f.state.UserCommand = cmd
-	f.state.Unlock()
-	return nil
-}
-
 func (f *FakeECU) Close() error {
 	f.running = false
 	f.state.Lock()

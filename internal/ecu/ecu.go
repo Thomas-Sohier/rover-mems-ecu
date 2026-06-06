@@ -92,12 +92,6 @@ type ECU interface {
 	// the connection is closed.
 	ReadData() error
 
-	// GetFaults returns the current list of fault codes.
-	GetFaults() []string
-
-	// SendCommand queues a user command to be sent on the next loop iteration.
-	SendCommand(cmd string) error
-
 	// Close terminates the connection and releases resources.
 	Close() error
 

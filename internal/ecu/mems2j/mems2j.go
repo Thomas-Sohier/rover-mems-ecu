@@ -78,37 +78,6 @@ func (m *MEMS2J) ReadData() error {
 	return m.loop()
 }
 
-func (m *MEMS2J) GetFaults() []string {
-	m.state.RLock()
-	defer m.state.RUnlock()
-	result := make([]string, len(m.state.Faults))
-	copy(result, m.state.Faults)
-	return result
-}
-
-func (m *MEMS2J) GetData() map[string]float32 {
-	m.state.RLock()
-	defer m.state.RUnlock()
-	result := make(map[string]float32, len(m.state.Data))
-	for k, v := range m.state.Data {
-		result[k] = v
-	}
-	return result
-}
-
-func (m *MEMS2J) IsConnected() bool {
-	m.state.RLock()
-	defer m.state.RUnlock()
-	return m.state.Connected
-}
-
-func (m *MEMS2J) SendCommand(cmd string) error {
-	m.state.Lock()
-	m.state.UserCommand = cmd
-	m.state.Unlock()
-	return nil
-}
-
 func (m *MEMS2J) Close() error {
 	m.state.Lock()
 	m.state.Connected = false

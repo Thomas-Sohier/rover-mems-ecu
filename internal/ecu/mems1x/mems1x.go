@@ -57,19 +57,6 @@ func (m *MEMS1x) ReadData() error {
 	return err
 }
 
-func (m *MEMS1x) GetFaults() []string {
-	m.state.RLock()
-	defer m.state.RUnlock()
-	return m.state.Faults
-}
-
-func (m *MEMS1x) SendCommand(cmd string) error {
-	m.state.Lock()
-	m.state.UserCommand = cmd
-	m.state.Unlock()
-	return nil
-}
-
 func (m *MEMS1x) Close() error {
 	m.state.Lock()
 	m.state.Connected = false

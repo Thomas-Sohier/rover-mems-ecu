@@ -446,19 +446,6 @@ func (m *MEMS3) parseFaults(buffer []byte) {
 	m.state.Faults = faultList
 }
 
-func (m *MEMS3) GetFaults() []string {
-	m.state.RLock()
-	defer m.state.RUnlock()
-	return m.state.Faults
-}
-
-func (m *MEMS3) SendCommand(cmd string) error {
-	m.state.Lock()
-	m.state.UserCommand = cmd
-	m.state.Unlock()
-	return nil
-}
-
 func (m *MEMS3) Close() error {
 	m.state.Lock()
 	m.state.Connected = false
