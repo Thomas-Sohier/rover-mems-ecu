@@ -1,8 +1,8 @@
 package ecu
 
-func bit(bit_num int, thebyte int) int {
+func bit(bitNum int, theByte int) int {
 	// returns the requested bit, counting from 0-7, 0-15 for doubles
-	return (thebyte >> bit_num) & 1
+	return (theByte >> bitNum) & 1
 }
 
 // GenerateKey computes the security-access key from the seed the ECU returns
