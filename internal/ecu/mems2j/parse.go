@@ -28,12 +28,12 @@ import (
 // reply; anything unrecognised is logged as raw hex. It takes m.mu itself so the
 // web server can read the data map concurrently.
 func (m *MEMS2J) parseResponse(actualData []byte) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.state.Lock()
+	defer m.state.Unlock()
 
 	if utils.SlicesEqual(actualData, wokeResponse) {
 		m.logDebug("< ECU woke up")
-		m.connected = true
+		m.state.Connected = true
 		time.Sleep(50 * time.Millisecond)
 		return
 	}
@@ -63,13 +63,13 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 	}
 	if utils.SlicesEqual(actualData, faultsClearedResponse) {
 		m.logDebug("< FAULTS CLEARED")
-		m.alert = "ECU reports faults cleared"
+		m.state.Alert = "ECU reports faults cleared"
 		return
 	}
 
 	if utils.SlicesEqual(actualData, responseLearnImmoCommand) {
 		m.logDebug("< IMMO CODE LEARN")
-		m.alert = "ECU reports set to learn new immo code"
+		m.state.Alert = "ECU reports set to learn new immo code"
 		return
 	}
 
@@ -88,7 +88,7 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		coolant += int(actualData[3])
 		coolantFloat := float32(coolant) - 2732
 		coolantFloat /= 10
-		m.data["coolant_temp"] = coolantFloat
+		m.state.Data["coolant_temp"] = coolantFloat
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData02) {
@@ -97,7 +97,7 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		oiltemp += int(actualData[3])
 		oiltempFloat := float32(oiltemp) - 2732
 		oiltempFloat /= 10
-		m.data["oil_temp"] = oiltempFloat
+		m.state.Data["oil_temp"] = oiltempFloat
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData03) {
@@ -106,14 +106,14 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		iat += int(actualData[3])
 		iatFloat := float32(iat) - 2732
 		iatFloat /= 10
-		m.data["intake_air_temp"] = iatFloat
+		m.state.Data["intake_air_temp"] = iatFloat
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData05) {
 		m.logDebug("got data packet 05")
 		fueltemp := int(actualData[2]) << 8
 		fueltemp += int(actualData[3])
-		m.data["fuel_temp"] = float32(fueltemp)
+		m.state.Data["fuel_temp"] = float32(fueltemp)
 		return
 	}
 	if len(actualData) >= 2 && utils.SlicesEqual(actualData[0:2], responseData06) {
@@ -124,7 +124,7 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		m.logDebug("got data packet 07")
 		mapkpa := int(actualData[2]) << 8
 		mapkpa += int(actualData[3])
-		m.data["map_sensor_kpa"] = float32(mapkpa) / 100
+		m.state.Data["map_sensor_kpa"] = float32(mapkpa) / 100
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData08) {
@@ -132,14 +132,14 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		tps := int(actualData[2]) << 8
 		tps += int(actualData[3])
 		tpsFloat := float32(tps) / 100
-		m.data["tps_degrees"] = tpsFloat
+		m.state.Data["tps_degrees"] = tpsFloat
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData09) {
 		m.logDebug("got data packet 09")
 		rpm := int(actualData[2]) << 8
 		rpm += int(actualData[3])
-		m.data["rpm"] = float32(rpm)
+		m.state.Data["rpm"] = float32(rpm)
 		return
 	}
 	if len(actualData) >= 6 && utils.SlicesEqual(actualData[0:2], responseData0A) {
@@ -150,35 +150,35 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		o2mv := int(actualData[4]) << 8
 		o2mv += int(actualData[5])
 		airFuel := ((float32(o2mv) / 1000) * 2) + 10
-		m.data["fuelling_feedback_percent"] = feedbackFloat
-		m.data["o2_mv"] = float32(o2mv)
-		m.data["estimate_air_fuel"] = airFuel
+		m.state.Data["fuelling_feedback_percent"] = feedbackFloat
+		m.state.Data["o2_mv"] = float32(o2mv)
+		m.state.Data["estimate_air_fuel"] = airFuel
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData0B) {
 		m.logDebug("got data packet 0B")
-		m.data["coil_1_charge_time"] = float32(actualData[2]) / 1000
-		m.data["coil_2_charge_time"] = float32(actualData[3]) / 1000
+		m.state.Data["coil_1_charge_time"] = float32(actualData[2]) / 1000
+		m.state.Data["coil_2_charge_time"] = float32(actualData[3]) / 1000
 		return
 	}
 	if len(actualData) >= 6 && utils.SlicesEqual(actualData[0:2], responseData0C) {
 		m.logDebug("got data packet 0C")
-		m.data["injector_1_pw"] = float32(actualData[2])
-		m.data["injector_2_pw"] = float32(actualData[3])
-		m.data["injector_3_pw"] = float32(actualData[4])
-		m.data["injector_4_pw"] = float32(actualData[5])
+		m.state.Data["injector_1_pw"] = float32(actualData[2])
+		m.state.Data["injector_2_pw"] = float32(actualData[3])
+		m.state.Data["injector_3_pw"] = float32(actualData[4])
+		m.state.Data["injector_4_pw"] = float32(actualData[5])
 		return
 	}
 	if len(actualData) >= 3 && utils.SlicesEqual(actualData[0:2], responseData0D) {
 		m.logDebug("got data packet 0D")
-		m.data["vehicle_speed"] = float32(actualData[2])
+		m.state.Data["vehicle_speed"] = float32(actualData[2])
 		return
 	}
 	if len(actualData) >= 3 && utils.SlicesEqual(actualData[0:2], responseData0F) {
 		m.logDebug("got data packet 0F")
-		m.data["throttle_switch"] = float32(int(actualData[2]) & 1)
-		m.data["ignition"] = float32((int(actualData[2]) >> 1) & 1)
-		m.data["ac_button"] = float32((int(actualData[2]) >> 3) & 1)
+		m.state.Data["throttle_switch"] = float32(int(actualData[2]) & 1)
+		m.state.Data["ignition"] = float32((int(actualData[2]) >> 1) & 1)
+		m.state.Data["ac_button"] = float32((int(actualData[2]) >> 3) & 1)
 		return
 	}
 	if len(actualData) >= 6 && utils.SlicesEqual(actualData[0:2], responseData10) {
@@ -186,15 +186,15 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		battery := int(actualData[4]) << 8
 		battery += int(actualData[5])
 		batteryFloat := float32(battery) / 1000
-		m.data["battery_voltage"] = batteryFloat
+		m.state.Data["battery_voltage"] = batteryFloat
 		return
 	}
 	if len(actualData) >= 3 && utils.SlicesEqual(actualData[0:2], responseData11) {
 		m.logDebug("got data packet 11")
 		primaryTriggerSync := actualData[2] & 1
 		secondaryTriggerSync := (actualData[2] >> 1) & 1
-		m.data["primary_trigger_sync"] = float32(1 - primaryTriggerSync)
-		m.data["secondary_trigger_sync"] = float32(1 - secondaryTriggerSync)
+		m.state.Data["primary_trigger_sync"] = float32(1 - primaryTriggerSync)
+		m.state.Data["secondary_trigger_sync"] = float32(1 - secondaryTriggerSync)
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData12) {
@@ -202,12 +202,12 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		idleValvePos := int(actualData[2]) << 8
 		idleValvePos += int(actualData[3])
 		idleValveFloat := float32(idleValvePos) / 2
-		m.data["idle_valve_pos"] = idleValveFloat
+		m.state.Data["idle_valve_pos"] = idleValveFloat
 		return
 	}
 	if len(actualData) >= 3 && utils.SlicesEqual(actualData[0:2], responseData13) {
 		m.logDebug("got data packet 13")
-		m.data["closed_loop"] = float32(actualData[2] & 0b00000001)
+		m.state.Data["closed_loop"] = float32(actualData[2] & 0b00000001)
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData21) {
@@ -217,14 +217,14 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		if rpmError > 32768 {
 			rpmError -= 65535
 		}
-		m.data["rpm_error"] = float32(rpmError)
+		m.state.Data["rpm_error"] = float32(rpmError)
 		return
 	}
 	if len(actualData) >= 4 && utils.SlicesEqual(actualData[0:2], responseData25) {
 		m.logDebug("got data packet 25")
 		camPercent := int(actualData[2]) << 8
 		camPercent += int(actualData[3])
-		m.data["cam_percent"] = float32(camPercent)
+		m.state.Data["cam_percent"] = float32(camPercent)
 		return
 	}
 	if len(actualData) >= 6 && utils.SlicesEqual(actualData[0:2], responseData3A) {
@@ -234,8 +234,8 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 		idleTimingOffsetFloat := float32(idleTimingOffset) / 10
 		idleAdjusterRpm := int(actualData[4]) << 8
 		idleAdjusterRpm += int(actualData[5])
-		m.data["idle_timing_offset"] = idleTimingOffsetFloat
-		m.data["idle_adjuster_rpm"] = float32(idleAdjusterRpm)
+		m.state.Data["idle_timing_offset"] = idleTimingOffsetFloat
+		m.state.Data["idle_adjuster_rpm"] = float32(idleAdjusterRpm)
 		return
 	}
 

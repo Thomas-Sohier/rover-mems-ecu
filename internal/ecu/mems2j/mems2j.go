@@ -3,7 +3,6 @@ package mems2j
 import (
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"rover-mems-agent/internal/ecu"
@@ -19,11 +18,7 @@ func init() {
 
 // MEMS2J handles MEMS 2J ECUs (KV6, K-series).
 type MEMS2J struct {
-	mu        sync.RWMutex
-	data      map[string]float32
-	faults    []string
-	alert     string
-	connected bool
+	state     *ecu.State
 	debugMode bool
 
 	sp              sers.SerialPort
@@ -31,14 +26,13 @@ type MEMS2J struct {
 	lastSentCommand []byte
 	seed            int
 	key             int
-	userCommand     string
 }
 
 // NewMEMS2J creates a new MEMS 2J ECU handler.
-func NewMEMS2J(_ *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
+func NewMEMS2J(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
+	state.DebugMode = cfg.DebugMode
 	return &MEMS2J{
-		data:      make(map[string]float32),
-		faults:    []string{},
+		state:     state,
 		reader:    serial.NewReader(),
 		debugMode: cfg.DebugMode,
 	}, nil
@@ -46,9 +40,9 @@ func NewMEMS2J(_ *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 
 func (m *MEMS2J) Connect(portName string) error {
 	m.logDebug("Connecting to MEMS 2J ECU")
-	m.mu.Lock()
-	m.connected = false
-	m.mu.Unlock()
+	m.state.Lock()
+	m.state.Connected = false
+	m.state.Unlock()
 
 	sp, err := sers.Open(portName)
 	if err != nil {
@@ -85,40 +79,40 @@ func (m *MEMS2J) ReadData() error {
 }
 
 func (m *MEMS2J) GetFaults() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]string, len(m.faults))
-	copy(result, m.faults)
+	m.state.RLock()
+	defer m.state.RUnlock()
+	result := make([]string, len(m.state.Faults))
+	copy(result, m.state.Faults)
 	return result
 }
 
 func (m *MEMS2J) GetData() map[string]float32 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make(map[string]float32, len(m.data))
-	for k, v := range m.data {
+	m.state.RLock()
+	defer m.state.RUnlock()
+	result := make(map[string]float32, len(m.state.Data))
+	for k, v := range m.state.Data {
 		result[k] = v
 	}
 	return result
 }
 
 func (m *MEMS2J) IsConnected() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.connected
+	m.state.RLock()
+	defer m.state.RUnlock()
+	return m.state.Connected
 }
 
 func (m *MEMS2J) SendCommand(cmd string) error {
-	m.mu.Lock()
-	m.userCommand = cmd
-	m.mu.Unlock()
+	m.state.Lock()
+	m.state.UserCommand = cmd
+	m.state.Unlock()
 	return nil
 }
 
 func (m *MEMS2J) Close() error {
-	m.mu.Lock()
-	m.connected = false
-	m.mu.Unlock()
+	m.state.Lock()
+	m.state.Connected = false
+	m.state.Unlock()
 	if m.sp != nil {
 		return m.sp.Close()
 	}
@@ -273,24 +267,24 @@ func (m *MEMS2J) sendCommand(command []byte) {
 // ping. A pending user command pre-empts the sequence, and a refused ping
 // (7F 3E 10) means the session dropped, so we restart from requestSeed.
 func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
-	m.mu.Lock()
-	cmd := m.userCommand
-	m.mu.Unlock()
+	m.state.Lock()
+	cmd := m.state.UserCommand
+	m.state.Unlock()
 
 	if cmd != "" {
 		command, ok := userCommands[cmd]
 		if ok {
 			m.logDebug("Running 2J user command: " + cmd)
-			m.mu.Lock()
-			m.userCommand = ""
-			m.mu.Unlock()
+			m.state.Lock()
+			m.state.UserCommand = ""
+			m.state.Unlock()
 			m.sendCommand(command)
 			return
 		} else {
 			m.logDebug("Unknown user command: " + cmd)
-			m.mu.Lock()
-			m.userCommand = ""
-			m.mu.Unlock()
+			m.state.Lock()
+			m.state.UserCommand = ""
+			m.state.Unlock()
 		}
 	}
 

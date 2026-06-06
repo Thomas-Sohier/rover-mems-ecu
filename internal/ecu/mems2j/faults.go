@@ -11,7 +11,7 @@ package mems2j
 // the register layout does. Each access is length-guarded because shorter
 // firmware revisions send fewer register bytes.
 //
-// Must be called with m.mu already held.
+// Must be called with m.state lock already held.
 func (m *MEMS2J) parseFaultsLocked(buffer []byte) {
 	faults := []string{}
 
@@ -184,5 +184,5 @@ func (m *MEMS2J) parseFaultsLocked(buffer []byte) {
 		}
 	}
 
-	m.faults = faults
+	m.state.Faults = faults
 }
