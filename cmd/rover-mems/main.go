@@ -140,7 +140,7 @@ func connectLoop(ctx context.Context) error {
 			}
 		}
 		if !found {
-			state.LogDebug("WARNING: Selected port '%s' not found in discovered list. Attempting to connect anyway...\n", selected)
+			state.LogDebugf("WARNING: Selected port '%s' not found in discovered list. Attempting to connect anyway...", selected)
 		}
 		portname = selected
 	} else {
@@ -148,7 +148,7 @@ func connectLoop(ctx context.Context) error {
 		if len(portList) == 1 {
 			state.LogDebug("Only found one port, auto-selecting: " + portname)
 		} else {
-			state.LogDebug("WARNING: Multiple ports found and none selected. Defaulting to first available: %s\n", portname)
+			state.LogDebugf("WARNING: Multiple ports found and none selected. Defaulting to first available: %s", portname)
 		}
 		state.Lock()
 		state.SelectedSerialPort = portname
