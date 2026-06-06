@@ -24,23 +24,28 @@ import (
 	_ "rover-mems-agent/internal/ecu/rc5"
 )
 
+// getPorts lists the available serial ports. It is a package variable so tests
+// can inject a deterministic port list instead of enumerating real hardware.
+var getPorts = serial.GetPortsList
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	state := ecu.NewState()
-	httpPort := parseFlags(state)
+	httpPort := parseFlags(state, os.Args[1:])
 	initializeAgent(state)
 	go web.NewServer(state).Run(ctx, httpPort)
 	runEventLoop(ctx, state)
 }
 
-func parseFlags(state *ecu.State) string {
-	serialPortFlag := flag.String("serialport", "", "Serial port to use")
-	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3, fake)")
-	modeFlag := flag.String("mode", "prod", "Operation mode: prod or debug")
-	portFlag := flag.Int("port", 8080, "HTTP server port")
-	flag.Parse()
+func parseFlags(state *ecu.State, args []string) string {
+	fs := flag.NewFlagSet("rover-mems", flag.ExitOnError)
+	serialPortFlag := fs.String("serialport", "", "Serial port to use")
+	ecuTypeFlag := fs.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3, fake)")
+	modeFlag := fs.String("mode", "prod", "Operation mode: prod or debug")
+	portFlag := fs.Int("port", 8080, "HTTP server port")
+	fs.Parse(args)
 
 	if *serialPortFlag != "" {
 		state.SelectedSerialPort = *serialPortFlag
@@ -108,7 +113,7 @@ func connectLoop(ctx context.Context, state *ecu.State) error {
 		return runECU(ctx, state, ecuType, ecuType)
 	}
 
-	portList, err := serial.GetPortsList()
+	portList, err := getPorts()
 	if err != nil {
 		return err
 	}

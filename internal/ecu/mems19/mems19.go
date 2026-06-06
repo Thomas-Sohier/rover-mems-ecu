@@ -16,6 +16,14 @@ func init() {
 	ecu.Register("1.9", NewMEMS19)
 }
 
+// openPort is the serial-port opener. It is a package variable so tests can
+// substitute a fake SerialPort in place of a real hardware port.
+var openPort = sers.Open
+
+// sleep is time.Sleep indirected through a package variable so tests can
+// neutralise the real-time delays of the 5-baud wake-up and handshake.
+var sleep = time.Sleep
+
 // MEMS19 handles MEMS 1.9 ECUs which require ISO 9141 5-baud wake-up.
 type MEMS19 struct {
 	*mems1x.MEMS1x
@@ -50,7 +58,7 @@ func NewMEMS19(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	m.state.LogDebug("Connecting to MEMS 1.9 ECU")
 
-	sp, err := sers.Open(portName)
+	sp, err := openPort(portName)
 	if err != nil {
 		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
@@ -125,7 +133,7 @@ func (m *MEMS19) handleWakeUpHandshake() error {
 		m.state.LogDebug("1.9 ECU: sending challenge 0x7C (default or derived from KW2=0x83)")
 	}
 
-	time.Sleep(25 * time.Millisecond)
+	sleep(25 * time.Millisecond)
 
 	m.state.LogDebugf("Sending Challenge Response: 0x%02X", challengeResponse)
 	_, err := m.sp.Write([]byte{challengeResponse})
@@ -210,10 +218,10 @@ func (m *MEMS19) flushInput() {
 // rate is what makes the ECU start the keyword handshake handled above.
 func (m *MEMS19) send5BaudWakeup() {
 	m.sp.SetBreak(false)
-	time.Sleep(500 * time.Millisecond)
+	sleep(500 * time.Millisecond)
 
 	m.sp.SetBreak(true)
-	time.Sleep(200 * time.Millisecond)
+	sleep(200 * time.Millisecond)
 
 	ecuAddress := 0x16
 	for i := 0; i < 8; i++ {
@@ -223,11 +231,11 @@ func (m *MEMS19) send5BaudWakeup() {
 		} else {
 			m.sp.SetBreak(true)
 		}
-		time.Sleep(200 * time.Millisecond)
+		sleep(200 * time.Millisecond)
 	}
 
 	m.sp.SetBreak(false)
-	time.Sleep(200 * time.Millisecond)
+	sleep(200 * time.Millisecond)
 }
 
 func (m *MEMS19) Type() string {
