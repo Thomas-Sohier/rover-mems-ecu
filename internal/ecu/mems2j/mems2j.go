@@ -81,6 +81,7 @@ func (m *MEMS2J) Close() error {
 	m.state.Lock()
 	m.state.Connected = false
 	m.state.Unlock()
+	m.reader.Stop()
 	if m.sp != nil {
 		return m.sp.Close()
 	}
