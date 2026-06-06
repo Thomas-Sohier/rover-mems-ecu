@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -127,14 +128,7 @@ func connectLoop(ctx context.Context, state *ecu.State) error {
 	portname := ""
 
 	if selected != "" {
-		found := false
-		for _, p := range portList {
-			if p == selected {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(portList, selected) {
 			state.LogDebugf("WARNING: Selected port '%s' not found in discovered list. Attempting to connect anyway...", selected)
 		}
 		portname = selected
