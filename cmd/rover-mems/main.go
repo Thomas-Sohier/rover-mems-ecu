@@ -23,23 +23,18 @@ import (
 	_ "rover-mems-agent/internal/ecu/rc5"
 )
 
-var (
-	state    *ecu.State
-	httpPort string
-)
-
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	state = ecu.NewState()
-	parseFlags()
-	initializeAgent()
+	state := ecu.NewState()
+	httpPort := parseFlags(state)
+	initializeAgent(state)
 	go web.NewServer(state).Run(ctx, httpPort)
-	runEventLoop(ctx)
+	runEventLoop(ctx, state)
 }
 
-func parseFlags() {
+func parseFlags(state *ecu.State) string {
 	serialPortFlag := flag.String("serialport", "", "Serial port to use")
 	ecuTypeFlag := flag.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3, fake)")
 	modeFlag := flag.String("mode", "prod", "Operation mode: prod or debug")
@@ -55,10 +50,10 @@ func parseFlags() {
 	if *modeFlag == "debug" {
 		state.DebugMode = true
 	}
-	httpPort = fmt.Sprintf(":%d", *portFlag)
+	return fmt.Sprintf(":%d", *portFlag)
 }
 
-func initializeAgent() {
+func initializeAgent(state *ecu.State) {
 	state.LogDebug("################################################################################")
 	state.LogDebug("# Rover MEMS Diagnostic Agent version " + state.AgentVersion)
 	state.LogDebug("################################################################################")
@@ -67,7 +62,7 @@ func initializeAgent() {
 	state.LogDebug("Selected ECU type: " + state.EcuType)
 }
 
-func runEventLoop(ctx context.Context) {
+func runEventLoop(ctx context.Context, state *ecu.State) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -76,7 +71,7 @@ func runEventLoop(ctx context.Context) {
 		default:
 		}
 
-		attemptConnection(ctx)
+		attemptConnection(ctx, state)
 
 		select {
 		case <-ctx.Done():
@@ -87,8 +82,8 @@ func runEventLoop(ctx context.Context) {
 	}
 }
 
-func attemptConnection(ctx context.Context) {
-	err := connectLoop(ctx)
+func attemptConnection(ctx context.Context, state *ecu.State) {
+	err := connectLoop(ctx, state)
 	if err != nil {
 		state.LogDebug(err.Error())
 		state.Lock()
@@ -97,7 +92,7 @@ func attemptConnection(ctx context.Context) {
 	}
 }
 
-func connectLoop(ctx context.Context) error {
+func connectLoop(ctx context.Context, state *ecu.State) error {
 	state.Lock()
 	state.Connected = false
 	ecuType := state.EcuType
@@ -109,7 +104,7 @@ func connectLoop(ctx context.Context) error {
 
 	// Fake mode: skip serial port logic
 	if ecuType == "fake" {
-		return runECU(ctx, ecuType, ecuType)
+		return runECU(ctx, state, ecuType, ecuType)
 	}
 
 	portList, err := serial.GetPortsList()
@@ -157,10 +152,10 @@ func connectLoop(ctx context.Context) error {
 
 	state.LogDebug("Using port: " + portname)
 
-	return runECU(ctx, ecuType, portname)
+	return runECU(ctx, state, ecuType, portname)
 }
 
-func runECU(ctx context.Context, ecuType, portname string) error {
+func runECU(ctx context.Context, state *ecu.State, ecuType, portname string) error {
 	cfg := ecu.Config{
 		DebugMode: state.DebugMode,
 	}
