@@ -32,7 +32,7 @@ Findings from the code-quality pass, ranked. Severity: 🔴 major · 🟠 modera
 ## 🔴 Major
 
 - [x] **Goroutine leak on every reconnect.** `serial.Reader.Start` (`internal/serial/readwrite.go`) spins a `for { sp.Read(...) }` goroutine with no stop signal, and `MEMS2J.Close()` never stops it. The main loop reconnects every 1s, so each failed 2J connect leaks a busy-looping goroutine. Add a stop mechanism (done channel / context) and call it from `Close()`.
-- [ ] **Unbounded slice indexing can crash the agent.** `parseData80`/`parseData7D` (`internal/ecu/mems1x/loop.go`) read fixed offsets (`data[14]`, `data[0xE]`, …) but only guard trailing fields by `packetSize`. A short/corrupt frame → index-out-of-range panic in the ECU goroutine, which is **not** behind `gin.Recovery()`, so it kills the process. Guard base-field access (length check / recover in the loop).
+- [x] **Unbounded slice indexing can crash the agent.** `parseData80`/`parseData7D` (`internal/ecu/mems1x/loop.go`) read fixed offsets (`data[14]`, `data[0xE]`, …) but only guard trailing fields by `packetSize`. A short/corrupt frame → index-out-of-range panic in the ECU goroutine, which is **not** behind `gin.Recovery()`, so it kills the process. Guard base-field access (length check / recover in the loop).
 
 ## 🟠 Moderate
 

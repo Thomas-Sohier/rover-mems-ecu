@@ -316,6 +316,13 @@ func (m *MEMS1x) parseData80(data []byte) {
 	data = data[1:]
 	packetSize := int(data[0])
 
+	// The unconditional field accesses below reach up to data[14] (0xE).
+	// A frame shorter than 15 bytes (after dropping the echo) is malformed.
+	if len(data) < 15 {
+		m.state.LogDebugf("data 0x80: short frame (packetSize=%d, got %d bytes) — skipping", packetSize, len(data))
+		return
+	}
+
 	m.state.Data["rpm"] = float32((int(data[1]) << 8) + int(data[2]))
 	m.state.Data["coolant_temp"] = float32(data[3]) - 55
 	if data[3] == 59 {
@@ -420,6 +427,13 @@ func (m *MEMS1x) parseData7D(data []byte) {
 
 	data = data[1:]
 	packetSize := int(data[0])
+
+	// The unconditional field accesses below reach up to data[0xE] (14).
+	// A frame shorter than 15 bytes (after dropping the echo) is malformed.
+	if len(data) < 15 {
+		m.state.LogDebugf("data 0x7D: short frame (packetSize=%d, got %d bytes) — skipping", packetSize, len(data))
+		return
+	}
 
 	m.state.Data["ignition_switch"] = float32(data[1])
 	m.state.Data["throttle_angle"] = float32(data[2]) / 2
