@@ -104,21 +104,21 @@ func NewRC5(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 // sending wokeResponse (55 06 3B); anything else means we are talking to the
 // wrong ECU/baud and we abort rather than guess.
 func (r *RC5) Connect(_ context.Context, portName string) error {
-	fmt.Println("Connecting to RC5 ECU")
+	r.state.LogDebug("Connecting to RC5 ECU")
 	r.state.Lock()
 	r.state.Connected = false
 	r.state.Unlock()
 
 	sp, err := sers.Open(portName)
 	if err != nil {
-		return err
+		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	r.sp = sp
 
 	err = sp.SetMode(2400, 8, sers.N, 1, sers.NO_HANDSHAKE)
 	if err != nil {
 		sp.Close()
-		return err
+		return fmt.Errorf("set serial mode: %w", err)
 	}
 
 	err = sp.SetReadParams(0, 0.001)
@@ -128,8 +128,8 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 	}
 
 	mode, _ := sp.GetMode()
-	fmt.Println("Serial cable set to:")
-	fmt.Println(mode)
+	r.state.LogDebug("Serial cable set to:")
+	r.state.LogDebug(mode)
 
 	sp.SetBreak(false)
 	time.Sleep(2000 * time.Millisecond)
@@ -177,7 +177,7 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 		}
 
 		if slicesEqual(initBuffer[0:3], wokeResponse) {
-			fmt.Println("RC5 woke up")
+			r.state.LogDebug("RC5 woke up")
 			r.state.Lock()
 			r.state.Connected = true
 			r.state.Unlock()
@@ -242,7 +242,7 @@ func (r *RC5) ReadData(ctx context.Context) error {
 			}
 
 			if slicesEqual(buffer[0:3], pongResponse) {
-				fmt.Println("< PONG from ECU")
+				r.state.LogDebug("< PONG from ECU")
 				buffer = buffer[3:]
 				time.Sleep(200 * time.Millisecond)
 				r.sendNextCommand(pongResponse)
@@ -250,7 +250,7 @@ func (r *RC5) ReadData(ctx context.Context) error {
 			}
 
 			if slicesEqual(buffer[0:3], faultsClearedResponse) {
-				fmt.Println("< FAULT CODES CLEARED")
+				r.state.LogDebug("< FAULT CODES CLEARED")
 				r.state.Lock()
 				r.state.Alert = "ECU reports faults cleared"
 				r.state.Unlock()
@@ -266,7 +266,7 @@ func (r *RC5) ReadData(ctx context.Context) error {
 				if len(buffer) < int(expectedLength) {
 					continue
 				}
-				fmt.Println("< FAULTS Got fault codes!")
+				r.state.LogDebug("< FAULTS Got fault codes!")
 				r.parseFaults(buffer)
 				buffer = buffer[expectedLength:]
 				time.Sleep(200 * time.Millisecond)
@@ -279,7 +279,7 @@ func (r *RC5) ReadData(ctx context.Context) error {
 	if readLoops == 100 {
 		return errors.New("readloop timed out")
 	}
-	fmt.Println("fell out of readloop")
+	r.state.LogDebug("fell out of readloop")
 	return nil
 }
 
@@ -297,10 +297,12 @@ func (r *RC5) sendNextCommand(previousResponse []byte) {
 			r.state.Lock()
 			r.state.UserCommand = ""
 			r.state.Unlock()
-			r.sp.Write(command)
+			if _, err := r.sp.Write(command); err != nil {
+				r.state.LogDebugf("serial write failed: %v", err)
+			}
 			return
 		} else {
-			fmt.Println("Asked to perform a user command but don't understand it")
+			r.state.LogDebug("Asked to perform a user command but don't understand it")
 		}
 	}
 
@@ -309,13 +311,21 @@ func (r *RC5) sendNextCommand(previousResponse []byte) {
 	r.state.Unlock()
 
 	if slicesEqual(previousResponse, pongResponse) {
-		r.sp.Write(requestFaultsCommand)
+		if _, err := r.sp.Write(requestFaultsCommand); err != nil {
+			r.state.LogDebugf("serial write failed: %v", err)
+		}
 	} else if slicesEqual(previousResponse, wokeResponse) || slicesEqual(previousResponse, faultsResponse) {
-		r.sp.Write(pingCommand)
+		if _, err := r.sp.Write(pingCommand); err != nil {
+			r.state.LogDebugf("serial write failed: %v", err)
+		}
 	} else if slicesEqual(previousResponse, faultsClearedResponse) {
-		r.sp.Write(requestFaultsCommand)
+		if _, err := r.sp.Write(requestFaultsCommand); err != nil {
+			r.state.LogDebugf("serial write failed: %v", err)
+		}
 	} else {
-		r.sp.Write(pingCommand)
+		if _, err := r.sp.Write(pingCommand); err != nil {
+			r.state.LogDebugf("serial write failed: %v", err)
+		}
 	}
 }
 
@@ -326,8 +336,7 @@ func (r *RC5) sendNextCommand(previousResponse []byte) {
 func (r *RC5) parseFaults(buffer []byte) {
 	buffer = buffer[2:]
 	numFaults := len(buffer) / 2
-	fmt.Println("num faults:")
-	fmt.Println(numFaults)
+	r.state.LogDebugf("num faults: %d", numFaults)
 
 	faults := []string{}
 

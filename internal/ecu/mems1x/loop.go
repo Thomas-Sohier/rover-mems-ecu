@@ -123,7 +123,9 @@ func (m *MEMS1x) nextCommand(previousResponse byte) byte {
 // echo before treating anything as a genuine ECU reply.
 func (m *MEMS1x) send(sp sers.SerialPort, data byte) {
 	m.state.LogDebugf("Sending byte: %02X", data)
-	sp.Write([]byte{data})
+	if _, err := sp.Write([]byte{data}); err != nil {
+		m.state.LogDebugf("serial write failed: %v", err)
+	}
 	m.gotKlineEcho = false
 	m.lastKlineByte = data
 }

@@ -3,6 +3,7 @@ package mems19
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"rover-mems-agent/internal/ecu"
@@ -51,14 +52,14 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 
 	sp, err := sers.Open(portName)
 	if err != nil {
-		return err
+		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	m.sp = sp
 
 	err = sp.SetMode(9600, 8, sers.N, 1, sers.NO_HANDSHAKE)
 	if err != nil {
 		sp.Close()
-		return err
+		return fmt.Errorf("set serial mode: %w", err)
 	}
 
 	sp.SetReadParams(1, 0.5)

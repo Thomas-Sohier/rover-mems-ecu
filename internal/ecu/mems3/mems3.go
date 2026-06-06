@@ -101,21 +101,21 @@ func NewMEMS3(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 }
 
 func (m *MEMS3) Connect(_ context.Context, portName string) error {
-	fmt.Println("Connecting to MEMS 3 ECU")
+	m.state.LogDebug("Connecting to MEMS 3 ECU")
 	m.state.Lock()
 	m.state.Connected = false
 	m.state.Unlock()
 
 	sp, err := sers.Open(portName)
 	if err != nil {
-		return err
+		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	m.sp = sp
 
 	err = sp.SetMode(9600, 8, sers.E, 1, sers.NO_HANDSHAKE)
 	if err != nil {
 		sp.Close()
-		return err
+		return fmt.Errorf("set serial mode: %w", err)
 	}
 
 	err = sp.SetReadParams(0, 0.001)
@@ -173,7 +173,7 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 		}
 
 		if len(buffer) >= 2 && slicesEqual(buffer[0:2], initCommand) {
-			fmt.Println("Got our init echo")
+			m.state.LogDebug("Got our init echo")
 			buffer = buffer[2:]
 			continue
 		}
@@ -205,7 +205,7 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 		m.state.Lock()
 
 		if len(actualData) >= 2 && slicesEqual(actualData[0:2], initAccepted) {
-			fmt.Println("< ECU woke up")
+			m.state.LogDebug("< ECU woke up")
 			buffer = nil
 			m.state.Connected = true
 			m.state.Unlock()
@@ -214,7 +214,7 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 			continue
 		}
 		if slicesEqual(actualData, startDiagResponse) {
-			fmt.Println("< Diag mode accepted")
+			m.state.LogDebug("< Diag mode accepted")
 			buffer = nil
 			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
@@ -222,17 +222,16 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 			continue
 		}
 		if len(actualData) >= 2 && slicesEqual(actualData[0:2], seedResponse) {
-			fmt.Println("< seed ")
 			m.seed = int(actualData[2]) << 8
 			m.seed += int(actualData[3])
-			fmt.Println(m.seed)
+			m.state.LogDebugf("< seed %d", m.seed)
 			if m.seed == 0 {
 				m.key = 0
 				buffer = nil
 				m.state.Unlock()
 				time.Sleep(50 * time.Millisecond)
 				m.sendNextCommand(nil)
-				fmt.Println("Auth not required, collecting data...")
+				m.state.LogDebug("Auth not required, collecting data...")
 				continue
 			} else {
 				m.key = ecu.GenerateKey(m.seed)
@@ -244,7 +243,7 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 			}
 		}
 		if slicesEqual(actualData, keyAcceptResponse) {
-			fmt.Println("< Key accepted, collecting data...")
+			m.state.LogDebug("< Key accepted, collecting data...")
 			buffer = nil
 			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
@@ -252,7 +251,7 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 			continue
 		}
 		if slicesEqual(actualData, pongResponse) {
-			fmt.Print(".")
+			m.state.LogDebug(".")
 			buffer = nil
 			m.state.Unlock()
 			time.Sleep(50 * time.Millisecond)
@@ -260,7 +259,7 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 			continue
 		}
 		if slicesEqual(actualData, faultsClearedResponse) {
-			fmt.Println("< FAULTS CLEARED")
+			m.state.LogDebug("< FAULTS CLEARED")
 			m.state.Alert = "ECU reports faults cleared"
 			buffer = nil
 			m.state.Unlock()
@@ -336,17 +335,17 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 			continue
 		}
 
-		fmt.Printf("unknown command in buffer (burning it): got %d bytes \n%s", len(buffer), hex.Dump(buffer[0:totalLength]))
-		fmt.Printf("actualData %d bytes \n%s", len(actualData), hex.Dump(actualData))
+		m.state.LogDebugf("unknown command in buffer (burning it): got %d bytes \n%s", len(buffer), hex.Dump(buffer[0:totalLength]))
+		m.state.LogDebugf("actualData %d bytes \n%s", len(actualData), hex.Dump(actualData))
 		buffer = buffer[totalLength:]
 		m.state.Unlock()
 	}
 
 	if readLoops >= readLoopsLimit {
-		fmt.Printf("had buffer data: got %d bytes \n%s", len(buffer), hex.Dump(buffer))
+		m.state.LogDebugf("had buffer data: got %d bytes \n%s", len(buffer), hex.Dump(buffer))
 		return errors.New("MEMS 3 timed out")
 	}
-	fmt.Println("fell out of readloop")
+	m.state.LogDebug("fell out of readloop")
 	return nil
 }
 
@@ -367,7 +366,7 @@ func (m *MEMS3) sendNextCommand(previousResponse []byte) {
 			m.sendCommand(command)
 			return
 		} else {
-			fmt.Println("Asked to perform a user command but don't understand it")
+			m.state.LogDebug("Asked to perform a user command but don't understand it")
 		}
 	}
 
@@ -414,7 +413,9 @@ func (m *MEMS3) sendCommand(data []byte) {
 	output = append(output, byte(len(data)))
 	output = append(output, data...)
 	output = append(output, xorAllBytes(output))
-	m.sp.Write(output)
+	if _, err := m.sp.Write(output); err != nil {
+		m.state.LogDebugf("serial write failed: %v", err)
+	}
 }
 
 // parseFaults decodes the MEMS 3 fault response (0x58 ...).

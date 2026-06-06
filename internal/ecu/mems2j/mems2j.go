@@ -19,8 +19,7 @@ func init() {
 
 // MEMS2J handles MEMS 2J ECUs (KV6, K-series).
 type MEMS2J struct {
-	state     *ecu.State
-	debugMode bool
+	state *ecu.State
 
 	sp              sers.SerialPort
 	reader          *serial.Reader
@@ -33,9 +32,8 @@ type MEMS2J struct {
 func NewMEMS2J(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 	state.DebugMode = cfg.DebugMode
 	return &MEMS2J{
-		state:     state,
-		reader:    serial.NewReader(),
-		debugMode: cfg.DebugMode,
+		state:  state,
+		reader: serial.NewReader(),
 	}, nil
 }
 
@@ -47,13 +45,13 @@ func (m *MEMS2J) Connect(_ context.Context, portName string) error {
 
 	sp, err := sers.Open(portName)
 	if err != nil {
-		return err
+		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	m.sp = sp
 
 	if err = sp.SetMode(10400, 8, sers.N, 1, sers.NO_HANDSHAKE); err != nil {
 		sp.Close()
-		return err
+		return fmt.Errorf("set serial mode: %w", err)
 	}
 
 	if err = sp.SetReadParams(0, 0); err != nil {
@@ -93,17 +91,8 @@ func (m *MEMS2J) Type() string {
 	return "2J"
 }
 
-func (m *MEMS2J) logDebug(msg string) {
-	if m.debugMode {
-		fmt.Println(msg)
-	}
-}
-
-func (m *MEMS2J) logDebugf(format string, args ...interface{}) {
-	if m.debugMode {
-		fmt.Printf(format+"\n", args...)
-	}
-}
+func (m *MEMS2J) logDebug(msg string)                  { m.state.LogDebug(msg) }
+func (m *MEMS2J) logDebugf(format string, args ...any) { m.state.LogDebugf(format, args...) }
 
 var (
 	initCommand = []byte{0x81, 0x13, 0xF7, 0x81, 0x0C}
@@ -223,7 +212,9 @@ func (m *MEMS2J) sendCommand(command []byte) {
 	finalCommand = append(finalCommand, byte(checksum))
 
 	m.lastSentCommand = finalCommand
-	m.sp.Write(finalCommand)
+	if _, err := m.sp.Write(finalCommand); err != nil {
+		m.state.LogDebugf("serial write failed: %v", err)
+	}
 }
 
 // sendNextCommand advances the 2J state machine based on the previous reply.
