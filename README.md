@@ -39,11 +39,11 @@ go build -o rover-mems-agent ./...
 ./rover-mems-agent -serialport /dev/ttyUSB0 -ecutype 1.9 -mode debug
 ```
 
-| Flag | Values | Description |
-|------|--------|-------------|
-| `-serialport` | e.g. `/dev/ttyUSB0` | Serial port (auto-detected if omitted) |
-| `-ecutype` | `1.x`, `1.9`, `2J`, `3`, `rc5`, `fake` | ECU variant |
-| `-mode` | `prod` (default), `debug` | `debug` enables byte-level logging |
+| Flag          | Values                                 | Description                            |
+| ------------- | -------------------------------------- | -------------------------------------- |
+| `-serialport` | e.g. `/dev/ttyUSB0`                    | Serial port (auto-detected if omitted) |
+| `-ecutype`    | `1.x`, `1.9`, `2J`, `3`, `rc5`, `fake` | ECU variant                            |
+| `-mode`       | `prod` (default), `debug`              | `debug` enables byte-level logging     |
 
 ### ARM builds
 
@@ -55,6 +55,16 @@ See https://github.com/distributed/sers/issues/10.
 ```bash
 GOOS=linux GOARCH=arm64 go build -o rover-mems-linux-arm64 ./...
 ```
+
+
+### Screenshots
+
+| Main tab                              | Debug tab                                    |
+| ------------------------------------- | -------------------------------------------- |
+| ![Main tab](assets/web_interface.png) | ![Debug tab](assets/web_interface_debug.png) |
+
+
+
 
 ## Disclaimer
 
