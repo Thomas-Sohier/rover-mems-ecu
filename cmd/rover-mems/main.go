@@ -45,7 +45,7 @@ func parseFlags(state *ecu.State, args []string) string {
 	ecuTypeFlag := fs.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3, fake)")
 	modeFlag := fs.String("mode", "prod", "Operation mode: prod or debug")
 	portFlag := fs.Int("port", 8080, "HTTP server port")
-	fs.Parse(args)
+	_ = fs.Parse(args) // flag.ExitOnError: Parse never returns an error here
 
 	if *serialPortFlag != "" {
 		state.SelectedSerialPort = *serialPortFlag

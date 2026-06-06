@@ -92,8 +92,7 @@ func (m *MEMS2J) Type() string {
 	return "2J"
 }
 
-func (m *MEMS2J) logDebug(msg string)                  { m.state.LogDebug(msg) }
-func (m *MEMS2J) logDebugf(format string, args ...any) { m.state.LogDebugf(format, args...) }
+func (m *MEMS2J) logDebug(msg string) { m.state.LogDebug(msg) }
 
 var (
 	initCommand = []byte{0x81, 0x13, 0xF7, 0x81, 0x0C}

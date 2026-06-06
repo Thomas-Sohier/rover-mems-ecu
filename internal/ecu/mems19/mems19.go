@@ -38,8 +38,12 @@ func NewMEMS19(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 	if err != nil {
 		return nil, err
 	}
+	base1x, ok := base.(*mems1x.MEMS1x)
+	if !ok {
+		return nil, fmt.Errorf("unexpected base ECU type %T", base)
+	}
 	return &MEMS19{
-		MEMS1x: base.(*mems1x.MEMS1x),
+		MEMS1x: base1x,
 		state:  state,
 	}, nil
 }

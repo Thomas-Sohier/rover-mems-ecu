@@ -29,3 +29,14 @@ issues:
     - path: internal/ecu/mems1x/loop\.go
       linters: [errcheck]
       text: "sp\\.Write"
+    # K-line break/timing control errors are intentionally dropped during the
+    # wake-up sequences; they are timing-driven and not recoverable mid-pulse.
+    - path: internal/ecu/rc5/rc5\.go
+      linters: [errcheck]
+      text: "sp\\.SetBreak"
+    - path: internal/ecu/mems2j/mems2j\.go
+      linters: [errcheck]
+      text: "sp\\.(SetBreak|Write)"
+    - path: internal/ecu/mems19/mems19\.go
+      linters: [errcheck]
+      text: "sp\\.(SetBreak|SetReadParams)"

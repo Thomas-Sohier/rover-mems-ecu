@@ -174,7 +174,9 @@ func (s *Server) wsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) wsIteration(conn *websocket.Conn) error {
-	conn.SetReadDeadline(time.Now().Add(idleTimeout))
+	if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+		return err
+	}
 
 	_, message, err := conn.ReadMessage()
 	if err != nil {
@@ -207,6 +209,8 @@ func (s *Server) wsIteration(conn *websocket.Conn) error {
 		return err
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(writeWait))
+	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
 	return conn.WriteMessage(websocket.TextMessage, jsonData)
 }
