@@ -1,6 +1,7 @@
 package mems1x
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -142,7 +143,7 @@ func (m *MEMS1x) send(sp sers.SerialPort, data byte) {
 // full frame is buffer[1]+1 bytes — we wait until that many bytes have arrived
 // before parsing. readLoops counts consecutive empty reads and aborts after the
 // limit so a dead/unplugged ECU surfaces as a timeout instead of hanging.
-func (m *MEMS1x) loop(kline bool) ([]byte, error) {
+func (m *MEMS1x) loop(ctx context.Context, kline bool) ([]byte, error) {
 	sp := m.sp
 	m.send(sp, 0xCA)
 
@@ -152,6 +153,12 @@ func (m *MEMS1x) loop(kline bool) ([]byte, error) {
 
 READLOOP:
 	for readLoops < readLoopsLimit {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		readLoops++
 		if readLoops > 1 {
 			time.Sleep(10 * time.Millisecond)

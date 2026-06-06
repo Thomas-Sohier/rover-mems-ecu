@@ -1,6 +1,7 @@
 package rc5
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -102,7 +103,7 @@ func NewRC5(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 // that the ECU recognises as the wake signal. A successful wake is the ECU
 // sending wokeResponse (55 06 3B); anything else means we are talking to the
 // wrong ECU/baud and we abort rather than guess.
-func (r *RC5) Connect(portName string) error {
+func (r *RC5) Connect(_ context.Context, portName string) error {
 	fmt.Println("Connecting to RC5 ECU")
 	r.state.Lock()
 	r.state.Connected = false
@@ -200,7 +201,7 @@ func (r *RC5) Connect(portName string) error {
 // discarded. A fault reply is variable length: its first byte encodes the count
 // (length = byte[0] - 0xC0 + 1), so we wait for that many bytes before parsing.
 // The poll alternates ping -> request faults.
-func (r *RC5) ReadData() error {
+func (r *RC5) ReadData(ctx context.Context) error {
 	time.Sleep(500 * time.Millisecond)
 	time.Sleep(200 * time.Millisecond)
 	r.sendNextCommand(wokeResponse)
@@ -209,6 +210,12 @@ func (r *RC5) ReadData() error {
 	readLoops := 0
 
 	for readLoops < 100 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		readLoops++
 		if readLoops > 1 {
 			time.Sleep(10 * time.Millisecond)

@@ -1,6 +1,7 @@
 package fake
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"time"
@@ -24,7 +25,7 @@ func NewFakeECU(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 	return &FakeECU{state: state}, nil
 }
 
-func (f *FakeECU) Connect(portName string) error {
+func (f *FakeECU) Connect(_ context.Context, portName string) error {
 	f.state.Lock()
 	f.state.Connected = true
 	f.state.Faults = []string{}
@@ -33,7 +34,7 @@ func (f *FakeECU) Connect(portName string) error {
 	return nil
 }
 
-func (f *FakeECU) ReadData() error {
+func (f *FakeECU) ReadData(ctx context.Context) error {
 	f.state.LogDebug("Fake ECU: starting simulation")
 
 	coolant := -10.0
@@ -42,6 +43,12 @@ func (f *FakeECU) ReadData() error {
 	tick := 0
 
 	for f.running {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		tick++
 		t := float64(tick)
 

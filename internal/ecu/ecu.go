@@ -2,6 +2,7 @@
 package ecu
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -85,12 +86,13 @@ func (s *State) RUnlock() { s.mu.RUnlock() }
 type ECU interface {
 	// Connect establishes communication with the ECU via the given serial port.
 	// It performs any required wake-up sequence and initialization handshake.
-	Connect(portName string) error
+	// It returns ctx.Err() if the context is cancelled before the handshake completes.
+	Connect(ctx context.Context, portName string) error
 
 	// ReadData runs the main data loop, continuously reading from the ECU
-	// and updating the shared State. It blocks until an error occurs or
-	// the connection is closed.
-	ReadData() error
+	// and updating the shared State. It blocks until an error occurs,
+	// the connection is closed, or ctx is cancelled (in which case it returns ctx.Err()).
+	ReadData(ctx context.Context) error
 
 	// Close terminates the connection and releases resources.
 	Close() error

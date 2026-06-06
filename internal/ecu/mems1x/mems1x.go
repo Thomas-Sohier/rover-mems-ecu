@@ -1,6 +1,8 @@
 package mems1x
 
 import (
+	"context"
+
 	"rover-mems-agent/internal/ecu"
 
 	"github.com/distributed/sers"
@@ -22,7 +24,7 @@ func NewMEMS1x(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 	return &MEMS1x{state: state}, nil
 }
 
-func (m *MEMS1x) Connect(portName string) error {
+func (m *MEMS1x) Connect(_ context.Context, portName string) error {
 	m.state.LogDebug("Connecting to MEMS 1.x (1.2, 1.3, 1.6) ECU")
 	m.state.Lock()
 	m.state.Connected = false
@@ -52,8 +54,8 @@ func (m *MEMS1x) Connect(portName string) error {
 	return nil
 }
 
-func (m *MEMS1x) ReadData() error {
-	_, err := m.loop(true)
+func (m *MEMS1x) ReadData(ctx context.Context) error {
+	_, err := m.loop(ctx, true)
 	return err
 }
 

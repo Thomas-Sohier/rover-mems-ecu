@@ -1,6 +1,7 @@
 package mems2j
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -38,7 +39,7 @@ func NewMEMS2J(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 	}, nil
 }
 
-func (m *MEMS2J) Connect(portName string) error {
+func (m *MEMS2J) Connect(_ context.Context, portName string) error {
 	m.logDebug("Connecting to MEMS 2J ECU")
 	m.state.Lock()
 	m.state.Connected = false
@@ -74,8 +75,8 @@ func (m *MEMS2J) Connect(portName string) error {
 	return nil
 }
 
-func (m *MEMS2J) ReadData() error {
-	return m.loop()
+func (m *MEMS2J) ReadData(ctx context.Context) error {
+	return m.loop(ctx)
 }
 
 func (m *MEMS2J) Close() error {
@@ -359,12 +360,18 @@ func (m *MEMS2J) wakeUp() error {
 // (len at buffer[0], so packetSize+2 bytes total); discard the echo of the
 // command we just sent; then parse the payload and ask sendNextCommand for the
 // next request. If no bytes arrive for timeoutMs the ECU is considered gone.
-func (m *MEMS2J) loop() error {
+func (m *MEMS2J) loop(ctx context.Context) error {
 	buffer := make([]byte, 0)
 	lastReceivedData := utils.TimestampMs()
 	timeoutMs := int64(1000)
 
 	for utils.TimestampMs() < lastReceivedData+timeoutMs {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		newData := m.reader.Read()
 		if len(newData) > 0 {
 			lastReceivedData = utils.TimestampMs()

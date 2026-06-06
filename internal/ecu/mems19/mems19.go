@@ -1,6 +1,7 @@
 package mems19
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -45,7 +46,7 @@ func NewMEMS19(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 // Sequence: open at 9600 8N1, drain any stale bytes, bit-bang the 5-baud
 // address, run the keyword handshake, then drop the read timeout back to
 // non-blocking for the fast data loop.
-func (m *MEMS19) Connect(portName string) error {
+func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	m.state.LogDebug("Connecting to MEMS 1.9 ECU")
 
 	sp, err := sers.Open(portName)

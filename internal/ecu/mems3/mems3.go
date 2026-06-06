@@ -1,6 +1,7 @@
 package mems3
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -99,7 +100,7 @@ func NewMEMS3(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 	return &MEMS3{state: state}, nil
 }
 
-func (m *MEMS3) Connect(portName string) error {
+func (m *MEMS3) Connect(_ context.Context, portName string) error {
 	fmt.Println("Connecting to MEMS 3 ECU")
 	m.state.Lock()
 	m.state.Connected = false
@@ -140,7 +141,7 @@ func (m *MEMS3) Connect(portName string) error {
 // derived from the seed by ecu.GenerateKey (a seed of 0 means no auth needed).
 // Once authenticated it polls faults then the data PIDs and loops on ping.
 // Frames whose header is our own request echo are skipped.
-func (m *MEMS3) ReadData() error {
+func (m *MEMS3) ReadData(ctx context.Context) error {
 	m.sendCommand(initCommand)
 
 	buffer := make([]byte, 0)
@@ -148,6 +149,12 @@ func (m *MEMS3) ReadData() error {
 	readLoopsLimit := 200
 
 	for readLoops < readLoopsLimit {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		readLoops++
 		if readLoops > 1 {
 			time.Sleep(10 * time.Millisecond)

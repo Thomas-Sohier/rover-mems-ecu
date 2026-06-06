@@ -76,7 +76,7 @@ func runEventLoop(ctx context.Context) {
 		default:
 		}
 
-		attemptConnection()
+		attemptConnection(ctx)
 
 		select {
 		case <-ctx.Done():
@@ -87,8 +87,8 @@ func runEventLoop(ctx context.Context) {
 	}
 }
 
-func attemptConnection() {
-	err := connectLoop()
+func attemptConnection(ctx context.Context) {
+	err := connectLoop(ctx)
 	if err != nil {
 		state.LogDebug(err.Error())
 		state.Lock()
@@ -97,7 +97,7 @@ func attemptConnection() {
 	}
 }
 
-func connectLoop() error {
+func connectLoop(ctx context.Context) error {
 	state.Lock()
 	state.Connected = false
 	ecuType := state.EcuType
@@ -109,7 +109,7 @@ func connectLoop() error {
 
 	// Fake mode: skip serial port logic
 	if ecuType == "fake" {
-		return runECU(ecuType, ecuType)
+		return runECU(ctx, ecuType, ecuType)
 	}
 
 	portList, err := serial.GetPortsList()
@@ -157,10 +157,10 @@ func connectLoop() error {
 
 	state.LogDebug("Using port: " + portname)
 
-	return runECU(ecuType, portname)
+	return runECU(ctx, ecuType, portname)
 }
 
-func runECU(ecuType, portname string) error {
+func runECU(ctx context.Context, ecuType, portname string) error {
 	cfg := ecu.Config{
 		DebugMode: state.DebugMode,
 	}
@@ -171,9 +171,9 @@ func runECU(ecuType, portname string) error {
 	}
 	defer ecuInstance.Close()
 
-	if err := ecuInstance.Connect(portname); err != nil {
+	if err := ecuInstance.Connect(ctx, portname); err != nil {
 		return err
 	}
 
-	return ecuInstance.ReadData()
+	return ecuInstance.ReadData(ctx)
 }
