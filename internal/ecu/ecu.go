@@ -47,7 +47,7 @@ func NewState() *State {
 }
 
 // LogDebug appends a debug message to LogLines if DebugMode is enabled.
-func (s *State) LogDebug(args ...interface{}) {
+func (s *State) LogDebug(args ...any) {
 	if !s.DebugMode {
 		return
 	}
@@ -62,7 +62,7 @@ func (s *State) LogDebug(args ...interface{}) {
 }
 
 // LogDebugf appends a formatted debug message.
-func (s *State) LogDebugf(format string, args ...interface{}) {
+func (s *State) LogDebugf(format string, args ...any) {
 	if !s.DebugMode {
 		return
 	}

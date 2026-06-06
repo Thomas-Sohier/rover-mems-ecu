@@ -188,7 +188,7 @@ func (s *Server) wsIteration(conn *websocket.Conn) error {
 
 	snap := s.state.Snapshot()
 	alert, errMsg := s.state.ConsumeAlertError()
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"faults":             snap.Faults,
 		"connected":          snap.Connected,
 		"ecuType":            snap.EcuType,
