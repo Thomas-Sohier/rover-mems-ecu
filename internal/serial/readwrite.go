@@ -1,6 +1,7 @@
 package serial
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/distributed/sers"
@@ -35,7 +36,13 @@ func (r *Reader) Start(sp sers.SerialPort) {
 			default:
 			}
 			rb := make([]byte, 256)
-			n, _ := sp.Read(rb[:])
+			n, err := sp.Read(rb[:])
+			if err != nil {
+				var te interface{ Timeout() bool }
+				if !errors.As(err, &te) || !te.Timeout() {
+					return
+				}
+			}
 			rb = rb[0:n]
 			for i := 0; i < n; i++ {
 				select {

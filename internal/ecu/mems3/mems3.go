@@ -161,7 +161,13 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 		}
 
 		rb := make([]byte, 128)
-		n, _ := m.sp.Read(rb[:])
+		n, err := m.sp.Read(rb[:])
+		if err != nil {
+			var te interface{ Timeout() bool }
+			if !errors.As(err, &te) || !te.Timeout() {
+				return fmt.Errorf("serial read: %w", err)
+			}
+		}
 		rb = rb[0:n]
 		buffer = append(buffer, rb...)
 		if n > 0 {

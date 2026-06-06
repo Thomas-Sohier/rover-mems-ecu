@@ -181,8 +181,14 @@ func (m *MEMS19) waitForChallengeEcho(expectedEcho byte) error {
 func (m *MEMS19) flushInput() {
 	buf := make([]byte, 1024)
 	for {
-		n, _ := m.sp.Read(buf)
+		n, err := m.sp.Read(buf)
 		if n == 0 {
+			if err != nil {
+				var te interface{ Timeout() bool }
+				if !errors.As(err, &te) || !te.Timeout() {
+					m.state.LogDebugf("serial read during flush: %v", err)
+				}
+			}
 			break
 		}
 	}

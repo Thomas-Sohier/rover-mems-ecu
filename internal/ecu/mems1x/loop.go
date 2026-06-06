@@ -164,7 +164,13 @@ READLOOP:
 		}
 
 		rb := make([]byte, 128)
-		n, _ := sp.Read(rb[:])
+		n, err := sp.Read(rb[:])
+		if err != nil {
+			var te interface{ Timeout() bool }
+			if !errors.As(err, &te) || !te.Timeout() {
+				return nil, fmt.Errorf("serial read: %w", err)
+			}
+		}
 		rb = rb[0:n]
 		buffer = append(buffer, rb...)
 		if n > 0 {
