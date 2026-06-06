@@ -182,37 +182,30 @@ func (s *Server) wsIteration(conn *websocket.Conn) error {
 		return err
 	}
 
-	var jsonData []byte
+	if strings.TrimSpace(string(message)) != "." {
+		s.state.LogDebugf("ws: ignoring unexpected message: %s", message)
+		return nil
+	}
 
-	if strings.TrimSpace(string(message)) == "." {
-		snap := s.state.Snapshot()
-		alert, errMsg := s.state.ConsumeAlertError()
-		payload := map[string]interface{}{
-			"faults":             snap.Faults,
-			"connected":          snap.Connected,
-			"ecuType":            snap.EcuType,
-			"userCommand":        snap.UserCommand,
-			"alert":              alert,
-			"error":              errMsg,
-			"ecuData":            snap.Data,
-			"agentVersion":       snap.AgentVersion,
-			"timestamp":          time.Now().String(),
-			"serialPorts":        snap.SerialPorts,
-			"selectedSerialPort": snap.SelectedSerialPort,
-			"logLines":           snap.LogLines,
-		}
-		jsonData, err = json.Marshal(payload)
-
-		if err != nil {
-			return err
-		}
-	} else {
-		log.Printf("ws recv: %s", message)
-		payload := map[string]interface{}{"command": "worked"}
-		jsonData, err = json.Marshal(payload)
-		if err != nil {
-			return err
-		}
+	snap := s.state.Snapshot()
+	alert, errMsg := s.state.ConsumeAlertError()
+	payload := map[string]interface{}{
+		"faults":             snap.Faults,
+		"connected":          snap.Connected,
+		"ecuType":            snap.EcuType,
+		"userCommand":        snap.UserCommand,
+		"alert":              alert,
+		"error":              errMsg,
+		"ecuData":            snap.Data,
+		"agentVersion":       snap.AgentVersion,
+		"timestamp":          time.Now().String(),
+		"serialPorts":        snap.SerialPorts,
+		"selectedSerialPort": snap.SelectedSerialPort,
+		"logLines":           snap.LogLines,
+	}
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return err
 	}
 
 	conn.SetWriteDeadline(time.Now().Add(writeWait))
