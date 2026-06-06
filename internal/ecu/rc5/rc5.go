@@ -94,6 +94,14 @@ func NewRC5(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 	return &RC5{state: state}, nil
 }
 
+// Connect opens the port at 2400 8N1 and wakes the RC5 airbag ECU.
+//
+// RC5 is the slowest of the supported buses (2400 baud) and needs a fixed
+// break/mark pattern rather than an addressed init: a long idle, then a
+// hand-timed sequence of break-on / break-off pulses (see the SetBreak calls)
+// that the ECU recognises as the wake signal. A successful wake is the ECU
+// sending wokeResponse (55 06 3B); anything else means we are talking to the
+// wrong ECU/baud and we abort rather than guess.
 func (r *RC5) Connect(portName string) error {
 	fmt.Println("Connecting to RC5 ECU")
 	r.state.Lock()
@@ -183,6 +191,15 @@ func (r *RC5) Connect(portName string) error {
 	return errors.New("Timed out waiting for RC5 to wake up")
 }
 
+// ReadData runs the RC5 request/response loop.
+//
+// RC5 commands are fixed 3-byte frames [82][service][checksum] (e.g. ping
+// 82 00 7D, request faults 82 33 4A, clear faults 82 C3 BA); replies are also
+// recognised by their first 3 bytes. As a half-duplex bus our own sent frames
+// are echoed back, so any buffer starting with a known command frame is
+// discarded. A fault reply is variable length: its first byte encodes the count
+// (length = byte[0] - 0xC0 + 1), so we wait for that many bytes before parsing.
+// The poll alternates ping -> request faults.
 func (r *RC5) ReadData() error {
 	time.Sleep(500 * time.Millisecond)
 	time.Sleep(200 * time.Millisecond)
@@ -259,6 +276,9 @@ func (r *RC5) ReadData() error {
 	return nil
 }
 
+// sendNextCommand chooses the next RC5 frame: a pong leads to a fault request, a
+// wake or fault reply leads back to ping, and a faults-cleared reply re-reads
+// faults. A pending user command (e.g. clear faults) pre-empts the cycle.
 func (r *RC5) sendNextCommand(previousResponse []byte) {
 	r.state.Lock()
 	cmd := r.state.UserCommand
@@ -292,6 +312,10 @@ func (r *RC5) sendNextCommand(previousResponse []byte) {
 	}
 }
 
+// parseFaults decodes the RC5 fault reply. After dropping the 2-byte header the
+// remainder is a list of 16-bit big-endian fault codes; each is looked up in
+// faultCodes for an airbag-specific description (driver/passenger squibs,
+// pretensioners, SRS lamp, with 0x25xx/0x26xx being the historic variants).
 func (r *RC5) parseFaults(buffer []byte) {
 	buffer = buffer[2:]
 	numFaults := len(buffer) / 2

@@ -239,6 +239,14 @@ var (
 	}
 )
 
+// sendCommand frames and writes a 2J command.
+//
+// Unlike the bare single bytes of MEMS 1.x, the 2J (KWP-style) protocol uses
+// length-prefixed packets with a trailing checksum: [len][payload...][checksum],
+// where len counts only the payload and checksum is the low byte of the sum of
+// the length byte plus every payload byte. We keep the framed bytes in
+// lastSentCommand so the read loop can recognise and discard the K-line echo of
+// what we just sent.
 func (m *MEMS2J) sendCommand(command []byte) {
 	finalCommand := []byte{byte(len(command))}
 	finalCommand = append(finalCommand, command...)
@@ -254,6 +262,16 @@ func (m *MEMS2J) sendCommand(command []byte) {
 	m.sp.Write(finalCommand)
 }
 
+// sendNextCommand advances the 2J state machine based on the previous reply.
+//
+// After the wake-up the 2J requires a sequence before it streams data:
+// startDiagnostic (10 A0) -> requestSeed (27 01) -> sendKey (27 02 + key) ->
+// ping (3E). The seed/key step is the security-access challenge: the ECU returns
+// a 16-bit seed and we must answer with the matching key (see ecu.GenerateKey);
+// a seed of 0 means we are already unlocked. Once unlocked we poll the fault
+// list (21 19) then cycle through the data PIDs (21 00 .. 21 3A) and loop back to
+// ping. A pending user command pre-empts the sequence, and a refused ping
+// (7F 3E 10) means the session dropped, so we restart from requestSeed.
 func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
 	m.mu.Lock()
 	cmd := m.userCommand
@@ -344,6 +362,14 @@ func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
 	}
 }
 
+// wakeUp performs the 2J fast-init and sends the start-communication request.
+//
+// The 2J uses a KWP2000-style fast-init rather than the 1.9 slow-init: instead
+// of bit-banging an address, we assert a single break "wake" pulse (25 ms low,
+// 25 ms high) to get the ECU's attention, then immediately transmit the
+// start-communication frame initCommand (81 13 F7 81 0C). The ECU answers with
+// C1 D5 8F (wokeResponse), which the read loop recognises to mark us connected.
+// The leading 200 ms of idle line ensures the pulse is seen cleanly.
 func (m *MEMS2J) wakeUp() error {
 	m.sp.SetBreak(false)
 	time.Sleep(200 * time.Millisecond)
@@ -361,6 +387,15 @@ func (m *MEMS2J) wakeUp() error {
 	return nil
 }
 
+// loop reads framed 2J packets and drives the request/response cycle.
+//
+// Reads come through a background goroutine (serial.Reader) because Linux serial
+// reads block even with a timeout, so we pull from its buffer instead of reading
+// the port directly. Per packet we: strip leading 0x00 padding; drop our own
+// init echo; wait until the full [len][payload][checksum] frame has arrived
+// (len at buffer[0], so packetSize+2 bytes total); discard the echo of the
+// command we just sent; then parse the payload and ask sendNextCommand for the
+// next request. If no bytes arrive for timeoutMs the ECU is considered gone.
 func (m *MEMS2J) loop() error {
 	buffer := make([]byte, 0)
 	lastReceivedData := utils.TimestampMs()

@@ -1,6 +1,16 @@
 package mems2j
 
-// parseFaultsLocked parses fault codes from the ECU response.
+// parseFaultsLocked decodes the 2J fault response (the 61 19 payload).
+//
+// Unlike MEMS 1.x, the 2J does not return numbered DTCs: the reply is a copy of
+// several internal RAM fault registers, and each bit within a given byte means a
+// specific sensor failed in a specific way. The block-comment offsets (RAM 594h,
+// 590h, etc.) are the ECU RAM addresses those bytes mirror, kept so the bit
+// meanings can be cross-checked against the protocol documentation. We split the
+// faults into low-voltage / high-voltage / present / historic groups exactly as
+// the register layout does. Each access is length-guarded because shorter
+// firmware revisions send fewer register bytes.
+//
 // Must be called with m.mu already held.
 func (m *MEMS2J) parseFaultsLocked(buffer []byte) {
 	faults := []string{}

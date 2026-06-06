@@ -126,6 +126,20 @@ func (m *MEMS3) Connect(portName string) error {
 	return nil
 }
 
+// ReadData wakes the MEMS 3 ECU and runs its request/response data loop.
+//
+// MEMS 3 speaks a KWP-style protocol at 9600 8E1 (note: even parity, unlike the
+// other variants). It does not need a break-pulse wake-up: sending initCommand
+// (1A 9A) is enough, and the ECU replies 5A 9A. Every frame is wrapped in a
+// 3-byte address header (B8 13 F7), a length byte, the payload, then an XOR
+// checksum (see sendCommand), so this loop reads buffer[3] to learn the payload
+// length and waits for the whole frame before acting.
+//
+// The connect sequence after the init reply is: startDiagnostic (10 A0) ->
+// requestSeed (27 01) -> sendKey (27 02 + key) -> ping (3E), where the key is
+// derived from the seed by ecu.GenerateKey (a seed of 0 means no auth needed).
+// Once authenticated it polls faults then the data PIDs and loops on ping.
+// Frames whose header is our own request echo are skipped.
 func (m *MEMS3) ReadData() error {
 	m.sendCommand(initCommand)
 
@@ -329,6 +343,9 @@ func (m *MEMS3) ReadData() error {
 	return nil
 }
 
+// sendNextCommand picks the next MEMS 3 request from the previous reply, walking
+// the init/auth/poll sequence documented on ReadData (init -> diag -> seed/key ->
+// ping -> faults -> data PIDs -> ping). A pending user command pre-empts it.
 func (m *MEMS3) sendNextCommand(previousResponse []byte) {
 	m.state.Lock()
 	cmd := m.state.UserCommand
@@ -378,6 +395,13 @@ func (m *MEMS3) sendNextCommand(previousResponse []byte) {
 	}
 }
 
+// sendCommand frames and writes a MEMS 3 command.
+//
+// Frame = [B8 13 F7 (address header)][len][payload...][XOR checksum], where the
+// checksum is the XOR of every preceding byte including the header and length.
+// The header identifies the diagnostic tool/ECU pair; the ECU prefixes its own
+// replies with the same header, which is how the read loop tells a response apart
+// from a request echo.
 func (m *MEMS3) sendCommand(data []byte) {
 	output := requestHeader
 	output = append(output, byte(len(data)))
@@ -386,6 +410,13 @@ func (m *MEMS3) sendCommand(data []byte) {
 	m.sp.Write(output)
 }
 
+// parseFaults decodes the MEMS 3 fault response (0x58 ...).
+//
+// After the 0x58 response code, faults are a flat list of 3-byte records:
+// 2 bytes of fault number (big-endian) plus 1 byte of fault status. The number
+// is looked up in the faults table for a human label and the status byte in
+// faultTypes (present / historic / test-not-complete); unknown values are kept
+// as raw numbers so nothing is silently dropped.
 func (m *MEMS3) parseFaults(buffer []byte) {
 	faultList := []string{}
 	buffer = buffer[2:]

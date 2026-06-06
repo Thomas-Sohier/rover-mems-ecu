@@ -9,6 +9,24 @@ import (
 	"rover-mems-agent/pkg/utils"
 )
 
+// parseResponse interprets one 2J payload (the bytes between the length prefix
+// and the checksum) and updates the shared data map.
+//
+// It matches on the 2-byte response header: handshake replies (woke, diag, seed,
+// key, pong, faults-cleared) drive the state machine, faults (61 19) are decoded
+// separately, and each data PID 61 xx carries one or two values. The 2J reports
+// most values as 16-bit big-endian with fixed scaling rather than the raw bytes
+// of MEMS 1.x, e.g.:
+//
+//	61 01 coolant  (value-2732)/10 degrees C  (0.1 K, offset 273.2 K)
+//	61 07 MAP      value/100 kPa
+//	61 09 RPM      direct
+//	61 0A fuelling value/100 %, plus O2 mV -> estimated AFR
+//	61 10 battery  value/1000 V
+//
+// A 0x7F header is a KWP negative response and 0x63 is an (ignored) ROM-dump
+// reply; anything unrecognised is logged as raw hex. It takes m.mu itself so the
+// web server can read the data map concurrently.
 func (m *MEMS2J) parseResponse(actualData []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
