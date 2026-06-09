@@ -65,15 +65,19 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	if err != nil {
 		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
+	m.state.LogDebugf("1.9 serial port %s opened at 9600 8N1", portName)
 	m.sp = sp
 
 	if err = sp.SetReadTimeout(500 * time.Millisecond); err != nil {
 		sp.Close()
 		return err
 	}
+	m.state.LogDebug("1.9 flushing stale input before wake-up")
 	m.flushInput()
 
+	m.state.LogDebug("1.9 sending 5-baud slow-init wake-up (address 0x16)")
 	m.send5BaudWakeup()
+	m.state.LogDebug("1.9 5-baud wake-up sent, starting keyword handshake")
 
 	// The handshake is best-effort, matching the reference Android app
 	// (rover-mems-android-application UsbService.wakeUp19Ecu): initEcu discards
@@ -83,6 +87,8 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	// would otherwise abort an ECU that is in fact awake. So we log and proceed.
 	if err := m.handleWakeUpHandshake(); err != nil {
 		m.state.LogDebugf("1.9 wake-up handshake did not complete cleanly: %v (continuing to 0xCA init anyway)", err)
+	} else {
+		m.state.LogDebug("1.9 wake-up handshake completed cleanly")
 	}
 
 	// Drain the handshake leftovers (our 0x7C echo, the ECU's 0xE9) so the shared
@@ -94,6 +100,7 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	}
 	m.flushInput()
 
+	m.state.LogDebug("1.9 handing off port to shared mems1x data loop (0xCA init)")
 	m.MEMS1x.SetSerialPort(sp)
 	return nil
 }
@@ -126,7 +133,7 @@ func (m *MEMS19) handleWakeUpHandshake() error {
 		}
 		if n > 0 {
 			buffer = append(buffer, tmp[:n]...)
-			m.state.LogDebug(buffer)
+			m.state.LogDebugf("1.9 handshake read %d byte(s), buffer now %X", n, buffer)
 
 			for len(buffer) > 0 && buffer[0] == 0x00 {
 				buffer = buffer[1:]
@@ -177,6 +184,7 @@ func (m *MEMS19) waitForChallengeEcho(expectedEcho byte) error {
 		}
 		if n > 0 {
 			buffer = append(buffer, tmp[:n]...)
+			m.state.LogDebugf("1.9 challenge-echo read %d byte(s), buffer now %X (expecting %02X E9)", n, buffer, expectedEcho)
 
 			for len(buffer) > 0 && buffer[0] == 0x00 {
 				buffer = buffer[1:]

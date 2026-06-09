@@ -108,8 +108,11 @@ func connectLoop(ctx context.Context, state *ecu.State) error {
 		return errors.New("no ECU type selected")
 	}
 
+	state.LogDebugf("connectLoop: starting connection attempt for ECU type %q", ecuType)
+
 	// Fake mode: skip serial port logic
 	if ecuType == "fake" {
+		state.LogDebug("connectLoop: fake mode, skipping serial port discovery")
 		return runECU(ctx, state, ecuType, ecuType)
 	}
 
@@ -161,13 +164,15 @@ func runECU(ctx context.Context, state *ecu.State, ecuType, portname string) err
 
 	ecuInstance, err := ecu.Factory(ecuType, state, cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("create ECU handler for type %q: %w", ecuType, err)
 	}
 	defer ecuInstance.Close()
 
+	state.LogDebugf("runECU: connecting %s handler on port %s", ecuType, portname)
 	if err := ecuInstance.Connect(ctx, portname); err != nil {
-		return err
+		return fmt.Errorf("connect %s on %s: %w", ecuType, portname, err)
 	}
 
+	state.LogDebugf("runECU: connected, starting data read loop for %s", ecuType)
 	return ecuInstance.ReadData(ctx)
 }
