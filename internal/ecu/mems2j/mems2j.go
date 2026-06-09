@@ -47,7 +47,9 @@ func (m *MEMS2J) Connect(_ context.Context, portName string) error {
 	}
 	m.sp = sp
 
-	if err = sp.SetReadTimeout(0); err != nil {
+	// Small blocking timeout instead of 0 (non-blocking) so the reader
+	// goroutine sleeps between frames rather than busy-looping a core.
+	if err = sp.SetReadTimeout(50 * time.Millisecond); err != nil {
 		sp.Close()
 		return err
 	}
