@@ -5,8 +5,7 @@ import (
 	"fmt"
 
 	"rover-mems-agent/internal/ecu"
-
-	"github.com/distributed/sers"
+	"rover-mems-agent/internal/serial"
 )
 
 func init() {
@@ -16,7 +15,7 @@ func init() {
 // MEMS1x handles MEMS 1.2, 1.3, 1.6 ECUs.
 type MEMS1x struct {
 	state         *ecu.State
-	sp            sers.SerialPort
+	sp            serial.Port
 	gotKlineEcho  bool
 	lastKlineByte byte
 }
@@ -33,27 +32,18 @@ func (m *MEMS1x) Connect(_ context.Context, portName string) error {
 	m.state.Connected = false
 	m.state.Unlock()
 
-	sp, err := sers.Open(portName)
+	sp, err := serial.Open(portName, 9600, serial.NoParity)
 	if err != nil {
 		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	m.sp = sp
 
-	err = sp.SetMode(9600, 8, sers.N, 1, sers.NO_HANDSHAKE)
-	if err != nil {
-		sp.Close()
-		return fmt.Errorf("set serial mode: %w", err)
-	}
-
-	err = sp.SetReadParams(0, 0.001)
-	if err != nil {
+	if err = sp.SetReadTimeout(0); err != nil {
 		sp.Close()
 		return err
 	}
 
-	mode, _ := sp.GetMode()
-	m.state.LogDebug("Serial cable set to:")
-	m.state.LogDebug(mode)
+	m.state.LogDebug("Serial cable set to 9600 8N1")
 	return nil
 }
 
@@ -77,6 +67,6 @@ func (m *MEMS1x) Type() string {
 }
 
 // SetSerialPort sets the serial port (used by MEMS19 after its custom wake-up).
-func (m *MEMS1x) SetSerialPort(sp sers.SerialPort) {
+func (m *MEMS1x) SetSerialPort(sp serial.Port) {
 	m.sp = sp
 }

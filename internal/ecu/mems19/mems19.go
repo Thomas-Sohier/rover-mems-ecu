@@ -8,8 +8,7 @@ import (
 
 	"rover-mems-agent/internal/ecu"
 	"rover-mems-agent/internal/ecu/mems1x"
-
-	"github.com/distributed/sers"
+	"rover-mems-agent/internal/serial"
 )
 
 func init() {
@@ -17,8 +16,8 @@ func init() {
 }
 
 // openPort is the serial-port opener. It is a package variable so tests can
-// substitute a fake SerialPort in place of a real hardware port.
-var openPort = sers.Open
+// substitute a fake Port in place of a real hardware port.
+var openPort = serial.Open
 
 // sleep is time.Sleep indirected through a package variable so tests can
 // neutralise the real-time delays of the 5-baud wake-up and handshake.
@@ -28,7 +27,7 @@ var sleep = time.Sleep
 type MEMS19 struct {
 	*mems1x.MEMS1x
 	state *ecu.State
-	sp    sers.SerialPort
+	sp    serial.Port
 }
 
 // NewMEMS19 creates a new MEMS 1.9 ECU handler.
@@ -62,30 +61,39 @@ func NewMEMS19(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	m.state.LogDebug("Connecting to MEMS 1.9 ECU")
 
-	sp, err := openPort(portName)
+	sp, err := openPort(portName, 9600, serial.NoParity)
 	if err != nil {
 		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	m.sp = sp
 
-	err = sp.SetMode(9600, 8, sers.N, 1, sers.NO_HANDSHAKE)
-	if err != nil {
+	if err = sp.SetReadTimeout(500 * time.Millisecond); err != nil {
 		sp.Close()
-		return fmt.Errorf("set serial mode: %w", err)
+		return err
 	}
-
-	sp.SetReadParams(1, 0.5)
 	m.flushInput()
 
 	m.send5BaudWakeup()
 
-	err = m.handleWakeUpHandshake()
-	if err != nil {
+	// The handshake is best-effort, matching the reference Android app
+	// (rover-mems-android-application UsbService.wakeUp19Ecu): initEcu discards
+	// wakeUp19Ecu's return value and falls through to the 0xCA init regardless of
+	// whether the keyword/echo exchange actually completed. Some K-line adapters
+	// buffer the echo differently or clock in a stray byte before 0x7C, which
+	// would otherwise abort an ECU that is in fact awake. So we log and proceed.
+	if err := m.handleWakeUpHandshake(); err != nil {
+		m.state.LogDebugf("1.9 wake-up handshake did not complete cleanly: %v (continuing to 0xCA init anyway)", err)
+	}
+
+	// Drain the handshake leftovers (our 0x7C echo, the ECU's 0xE9) so the shared
+	// mems1x loop's K-line echo tracking starts clean on its own 0xCA — the app
+	// does the equivalent with dataBufferSize = 0 before sending 0xCA.
+	if err := sp.SetReadTimeout(0); err != nil {
 		sp.Close()
 		return err
 	}
+	m.flushInput()
 
-	sp.SetReadParams(0, 0.001)
 	m.MEMS1x.SetSerialPort(sp)
 	return nil
 }
@@ -208,38 +216,49 @@ func (m *MEMS19) flushInput() {
 
 // send5BaudWakeup bit-bangs the ECU address 0x16 as an ISO 9141 5-baud slow-init.
 //
-// There is no UART mode for 5 baud, so we toggle the line by hand with SetBreak.
-// On K-line the idle (break off) state is logic 1 and break on is logic 0, and
-// 5 baud means each bit lasts 1/5 s = 200 ms. The frame is one start bit (0),
-// the 8 bits of 0x16 sent LSB-first, then the stop bit (1):
+// There is no UART mode for 5 baud, so we drive the line by hand. On K-line the
+// idle state is logic 1 (line high) and a break is logic 0 (line low); 5 baud
+// means each bit lasts 1/5 s = 200 ms. The frame is one start bit (0), the 8
+// bits of 0x16 sent LSB-first, then the stop bit (1):
 //
-//	500 ms idle      -> let the line settle before we begin
-//	200 ms break on  -> start bit (logic 0)
-//	8 x 200 ms       -> address 0x16, least-significant bit first
-//	200 ms break off -> stop bit (logic 1)
+//	500 ms idle  -> let the line settle before we begin
+//	200 ms low   -> start bit (logic 0)
+//	8 x 200 ms   -> address 0x16, least-significant bit first
+//	200 ms high  -> stop bit (logic 1)
+//
+// Port.Break asserts a low pulse for a fixed duration, so we coalesce runs of
+// consecutive logic-0 bits into a single Break (avoiding any line glitch between
+// adjacent low bits) and runs of logic-1 bits into a single idle sleep.
 //
 // 0x16 is the published diagnostic address for the 1.9 ECU; sending it at this
 // rate is what makes the ECU start the keyword handshake handled above.
 func (m *MEMS19) send5BaudWakeup() {
-	m.sp.SetBreak(false)
+	const bitTime = 200 * time.Millisecond
+	const ecuAddress = 0x16
+
+	// frame: start bit (0), address LSB-first, stop bit (1).
+	frame := []int{0}
+	for i := 0; i < 8; i++ {
+		frame = append(frame, (ecuAddress>>i)&1)
+	}
+	frame = append(frame, 1)
+
+	// Let the line settle high before the start bit.
 	sleep(500 * time.Millisecond)
 
-	m.sp.SetBreak(true)
-	sleep(200 * time.Millisecond)
-
-	ecuAddress := 0x16
-	for i := 0; i < 8; i++ {
-		bit := (ecuAddress >> i) & 1
-		if bit > 0 {
-			m.sp.SetBreak(false)
-		} else {
-			m.sp.SetBreak(true)
+	for i := 0; i < len(frame); {
+		j := i
+		for j < len(frame) && frame[j] == frame[i] {
+			j++
 		}
-		sleep(200 * time.Millisecond)
+		d := time.Duration(j-i) * bitTime
+		if frame[i] == 0 {
+			m.sp.Break(d) // hold the line low for the whole run
+		} else {
+			sleep(d) // line idles high
+		}
+		i = j
 	}
-
-	m.sp.SetBreak(false)
-	sleep(200 * time.Millisecond)
 }
 
 func (m *MEMS19) Type() string {

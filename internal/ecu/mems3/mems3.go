@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"rover-mems-agent/internal/ecu"
-
-	"github.com/distributed/sers"
+	"rover-mems-agent/internal/serial"
 )
 
 func init() {
@@ -89,7 +88,7 @@ var (
 // MEMS3 handles MEMS 3 ECUs.
 type MEMS3 struct {
 	state *ecu.State
-	sp    sers.SerialPort
+	sp    serial.Port
 	seed  int
 	key   int
 }
@@ -106,20 +105,13 @@ func (m *MEMS3) Connect(_ context.Context, portName string) error {
 	m.state.Connected = false
 	m.state.Unlock()
 
-	sp, err := sers.Open(portName)
+	sp, err := serial.Open(portName, 9600, serial.EvenParity)
 	if err != nil {
 		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	m.sp = sp
 
-	err = sp.SetMode(9600, 8, sers.E, 1, sers.NO_HANDSHAKE)
-	if err != nil {
-		sp.Close()
-		return fmt.Errorf("set serial mode: %w", err)
-	}
-
-	err = sp.SetReadParams(0, 0.001)
-	if err != nil {
+	if err = sp.SetReadTimeout(0); err != nil {
 		sp.Close()
 		return err
 	}

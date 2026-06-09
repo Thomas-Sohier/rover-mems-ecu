@@ -3,8 +3,6 @@ package serial
 import (
 	"errors"
 	"sync"
-
-	"github.com/distributed/sers"
 )
 
 // Reader provides non-blocking serial reads using a channel buffer.
@@ -24,7 +22,7 @@ func NewReader() *Reader {
 
 // Start begins the read routine for the given serial port.
 // A new done channel is initialised so Start can be called again after Stop.
-func (r *Reader) Start(sp sers.SerialPort) {
+func (r *Reader) Start(sp Port) {
 	r.done = make(chan struct{})
 	r.once = sync.Once{}
 	done := r.done

@@ -33,10 +33,10 @@ issues:
     # wake-up sequences; they are timing-driven and not recoverable mid-pulse.
     - path: internal/ecu/rc5/rc5\.go
       linters: [errcheck]
-      text: "sp\\.SetBreak"
+      text: "sp\\.Break"
     - path: internal/ecu/mems2j/mems2j\.go
       linters: [errcheck]
-      text: "sp\\.(SetBreak|Write)"
+      text: "sp\\.(Break|Write)"
     - path: internal/ecu/mems19/mems19\.go
       linters: [errcheck]
-      text: "sp\\.(SetBreak|SetReadParams)"
+      text: "sp\\.Break"

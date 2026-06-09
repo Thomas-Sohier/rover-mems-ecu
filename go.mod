@@ -3,10 +3,10 @@ module rover-mems-agent
 go 1.23.0
 
 require (
-	github.com/distributed/sers v1.1.0-rc1.0.20220718092729-b7631e8356ee
 	github.com/gin-contrib/cors v1.3.1
 	github.com/gin-gonic/gin v1.10.0
 	github.com/gorilla/websocket v1.4.2
+	go.bug.st/serial v1.6.4
 	golang.org/x/sys v0.32.0
 )
 
@@ -14,6 +14,7 @@ require (
 	github.com/bytedance/sonic v1.13.2 // indirect
 	github.com/bytedance/sonic/loader v0.2.4 // indirect
 	github.com/cloudwego/base64x v0.1.5 // indirect
+	github.com/creack/goselect v0.1.2 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
 	github.com/gin-contrib/sse v1.0.0 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect

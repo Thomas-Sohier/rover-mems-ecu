@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/distributed/sers"
+	"rover-mems-agent/internal/serial"
 )
 
 var (
@@ -121,7 +121,7 @@ func (m *MEMS1x) nextCommand(previousResponse byte) byte {
 // electrically echoed straight back to us. We record the byte we just sent
 // (lastKlineByte) and clear gotKlineEcho so the read loop knows to discard that
 // echo before treating anything as a genuine ECU reply.
-func (m *MEMS1x) send(sp sers.SerialPort, data byte) {
+func (m *MEMS1x) send(sp serial.Port, data byte) {
 	m.state.LogDebugf("Sending byte: %02X", data)
 	if _, err := sp.Write([]byte{data}); err != nil {
 		m.state.LogDebugf("serial write failed: %v", err)

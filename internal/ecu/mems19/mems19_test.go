@@ -9,12 +9,11 @@ import (
 
 	"rover-mems-agent/internal/ecu"
 	"rover-mems-agent/internal/ecu/serialtest"
-
-	"github.com/distributed/sers"
+	"rover-mems-agent/internal/serial"
 )
 
 // newHandler builds a MEMS19 wired to the given fake port, bypassing Connect.
-func newHandler(sp sers.SerialPort) *MEMS19 {
+func newHandler(sp serial.Port) *MEMS19 {
 	return &MEMS19{state: ecu.NewState(), sp: sp}
 }
 
@@ -113,21 +112,16 @@ func TestSend5BaudWakeup_BreakSequence(t *testing.T) {
 
 	m.send5BaudWakeup()
 
-	// Address 0x16 = 0b00010110, sent LSB-first, framed by a start bit (break
-	// on) and a stop bit (break off), preceded by the idle (break off) state.
-	// SetBreak(true) for logic 0, SetBreak(false) for logic 1.
-	want := []bool{
-		false, // idle
-		true,  // start bit
-		true,  // bit0 = 0
-		false, // bit1 = 1
-		false, // bit2 = 1
-		true,  // bit3 = 0
-		false, // bit4 = 1
-		true,  // bit5 = 0
-		true,  // bit6 = 0
-		true,  // bit7 = 0
-		false, // stop bit
+	// Address 0x16 = 0b00010110, sent LSB-first, framed by a start bit (logic 0)
+	// and a stop bit (logic 1). Bit pattern (with framing):
+	//   start=0 b0=0 b1=1 b2=1 b3=0 b4=1 b5=0 b6=0 b7=0 stop=1
+	// Consecutive logic-0 runs are coalesced into one Break each (logic-1 runs
+	// produce no Break), so the recorded breaks are the low runs:
+	//   start+b0 = 400ms, b3 = 200ms, b5+b6+b7 = 600ms.
+	want := []time.Duration{
+		400 * time.Millisecond,
+		200 * time.Millisecond,
+		600 * time.Millisecond,
 	}
 	if !slices.Equal(fake.Breaks, want) {
 		t.Errorf("break sequence:\n got %v\nwant %v", fake.Breaks, want)
@@ -157,7 +151,7 @@ func TestConnect_Success(t *testing.T) {
 	fake.Enqueue(0x7F, 0xE9)
 
 	orig := openPort
-	openPort = func(string) (sers.SerialPort, error) { return fake, nil }
+	openPort = func(string, int, serial.Parity) (serial.Port, error) { return fake, nil }
 	t.Cleanup(func() { openPort = orig })
 
 	m, err := NewMEMS19(ecu.NewState(), ecu.Config{})
@@ -175,7 +169,7 @@ func TestConnect_Success(t *testing.T) {
 func TestConnect_OpenError(t *testing.T) {
 	wantErr := errors.New("no such port")
 	orig := openPort
-	openPort = func(string) (sers.SerialPort, error) { return nil, wantErr }
+	openPort = func(string, int, serial.Parity) (serial.Port, error) { return nil, wantErr }
 	t.Cleanup(func() { openPort = orig })
 
 	m, _ := NewMEMS19(ecu.NewState(), ecu.Config{})

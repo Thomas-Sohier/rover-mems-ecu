@@ -8,8 +8,7 @@ import (
 	"time"
 
 	"rover-mems-agent/internal/ecu"
-
-	"github.com/distributed/sers"
+	"rover-mems-agent/internal/serial"
 )
 
 func init() {
@@ -86,7 +85,7 @@ var (
 // RC5 handles RC5 airbag ECUs.
 type RC5 struct {
 	state *ecu.State
-	sp    sers.SerialPort
+	sp    serial.Port
 }
 
 // NewRC5 creates a new RC5 ECU handler.
@@ -99,8 +98,8 @@ func NewRC5(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 //
 // RC5 is the slowest of the supported buses (2400 baud) and needs a fixed
 // break/mark pattern rather than an addressed init: a long idle, then a
-// hand-timed sequence of break-on / break-off pulses (see the SetBreak calls)
-// that the ECU recognises as the wake signal. A successful wake is the ECU
+// hand-timed sequence of break-on / break-off pulses (see the Break calls and
+// sleeps) that the ECU recognises as the wake signal. A successful wake is the ECU
 // sending wokeResponse (55 06 3B); anything else means we are talking to the
 // wrong ECU/baud and we abort rather than guess.
 func (r *RC5) Connect(_ context.Context, portName string) error {
@@ -109,42 +108,29 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 	r.state.Connected = false
 	r.state.Unlock()
 
-	sp, err := sers.Open(portName)
+	sp, err := serial.Open(portName, 2400, serial.NoParity)
 	if err != nil {
 		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	r.sp = sp
 
-	err = sp.SetMode(2400, 8, sers.N, 1, sers.NO_HANDSHAKE)
-	if err != nil {
-		sp.Close()
-		return fmt.Errorf("set serial mode: %w", err)
-	}
-
-	err = sp.SetReadParams(0, 0.001)
-	if err != nil {
+	if err = sp.SetReadTimeout(0); err != nil {
 		sp.Close()
 		return err
 	}
 
-	mode, _ := sp.GetMode()
-	r.state.LogDebug("Serial cable set to:")
-	r.state.LogDebug(mode)
+	r.state.LogDebug("Serial cable set to 2400 8N1")
 
-	sp.SetBreak(false)
-	time.Sleep(2000 * time.Millisecond)
-	sp.SetBreak(true)
-	time.Sleep(200 * time.Millisecond)
-	sp.SetBreak(false)
-	time.Sleep(400 * time.Millisecond)
-	sp.SetBreak(true)
-	time.Sleep(400 * time.Millisecond)
-	sp.SetBreak(false)
-	time.Sleep(400 * time.Millisecond)
-	sp.SetBreak(true)
-	time.Sleep(400 * time.Millisecond)
-	sp.SetBreak(false)
-	time.Sleep(200 * time.Millisecond)
+	// Wake pattern: a long idle (line high), then alternating low/high pulses.
+	// A low period is Break(d) (asserts the line low for d); a high period is a
+	// plain sleep with the line idling high.
+	time.Sleep(2000 * time.Millisecond) // idle
+	sp.Break(200 * time.Millisecond)    // start bit (low)
+	time.Sleep(400 * time.Millisecond)  // high
+	sp.Break(400 * time.Millisecond)    // low
+	time.Sleep(400 * time.Millisecond)  // high
+	sp.Break(400 * time.Millisecond)    // low
+	time.Sleep(200 * time.Millisecond)  // stop (high)
 
 	initBuffer := make([]byte, 0)
 	initLoops := 0

@@ -9,8 +9,6 @@ import (
 	"rover-mems-agent/internal/ecu"
 	"rover-mems-agent/internal/serial"
 	"rover-mems-agent/pkg/utils"
-
-	"github.com/distributed/sers"
 )
 
 func init() {
@@ -21,7 +19,7 @@ func init() {
 type MEMS2J struct {
 	state *ecu.State
 
-	sp              sers.SerialPort
+	sp              serial.Port
 	reader          *serial.Reader
 	lastSentCommand []byte
 	seed            int
@@ -43,25 +41,18 @@ func (m *MEMS2J) Connect(_ context.Context, portName string) error {
 	m.state.Connected = false
 	m.state.Unlock()
 
-	sp, err := sers.Open(portName)
+	sp, err := serial.Open(portName, 10400, serial.NoParity)
 	if err != nil {
 		return fmt.Errorf("open serial port %s: %w", portName, err)
 	}
 	m.sp = sp
 
-	if err = sp.SetMode(10400, 8, sers.N, 1, sers.NO_HANDSHAKE); err != nil {
-		sp.Close()
-		return fmt.Errorf("set serial mode: %w", err)
-	}
-
-	if err = sp.SetReadParams(0, 0); err != nil {
+	if err = sp.SetReadTimeout(0); err != nil {
 		sp.Close()
 		return err
 	}
 
-	mode, _ := sp.GetMode()
-	m.logDebug("Serial cable set to:")
-	m.logDebug(fmt.Sprint(mode))
+	m.logDebug("Serial cable set to 10400 8N1")
 
 	m.reader.Start(sp)
 
@@ -326,13 +317,10 @@ func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
 // C1 D5 8F (wokeResponse), which the read loop recognises to mark us connected.
 // The leading 200 ms of idle line ensures the pulse is seen cleanly.
 func (m *MEMS2J) wakeUp() error {
-	m.sp.SetBreak(false)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond) // idle line high
 
-	m.sp.SetBreak(true)
-	time.Sleep(25 * time.Millisecond)
-	m.sp.SetBreak(false)
-	time.Sleep(25 * time.Millisecond)
+	m.sp.Break(25 * time.Millisecond)  // wake pulse: line low
+	time.Sleep(25 * time.Millisecond)  // line high
 
 	time.Sleep(50 * time.Millisecond)
 

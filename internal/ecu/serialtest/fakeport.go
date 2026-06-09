@@ -1,10 +1,12 @@
 // Package serialtest provides a scriptable fake implementation of
-// sers.SerialPort for use in unit tests, so K-line protocol logic can be
+// serial.Port for use in unit tests, so K-line protocol logic can be
 // exercised without real serial hardware.
 package serialtest
 
 import (
-	"github.com/distributed/sers"
+	"time"
+
+	"rover-mems-agent/internal/serial"
 )
 
 // timeoutError is a read error that reports Timeout() == true, mimicking the
@@ -14,7 +16,7 @@ type timeoutError struct{}
 func (timeoutError) Error() string { return "serialtest: read timeout" }
 func (timeoutError) Timeout() bool { return true }
 
-// FakePort is a scriptable sers.SerialPort. Reads are served from a queue of
+// FakePort is a scriptable serial.Port. Reads are served from a queue of
 // scripted responses; everything written, and every break state, is recorded
 // for assertions.
 //
@@ -29,8 +31,10 @@ type FakePort struct {
 
 	// Written accumulates every byte passed to Write, in order.
 	Written []byte
-	// Breaks records every SetBreak state in order (true = break on).
-	Breaks []bool
+	// Breaks records the duration of every Break call in order. Each entry is a
+	// logic-0 (line-low) segment of a wake-up waveform; logic-1 segments produce
+	// no Break call.
+	Breaks []time.Duration
 	// Closed reports whether Close has been called.
 	Closed bool
 }
@@ -95,25 +99,18 @@ func (p *FakePort) Close() error {
 	return nil
 }
 
-// SetBreak records the requested break state.
-func (p *FakePort) SetBreak(on bool) error {
-	p.Breaks = append(p.Breaks, on)
+// Break records the duration of the break pulse and returns immediately (unlike
+// a real port, it does not actually block for the duration).
+func (p *FakePort) Break(d time.Duration) error {
+	p.Breaks = append(p.Breaks, d)
 	return nil
 }
 
-// SetMode is a no-op that satisfies the interface.
-func (p *FakePort) SetMode(baudrate, databits, parity, stopbits, handshake int) error {
-	return nil
-}
-
-// GetMode returns a zero Mode.
-func (p *FakePort) GetMode() (sers.Mode, error) { return sers.Mode{}, nil }
-
-// SetReadParams is a no-op that satisfies the interface.
-func (p *FakePort) SetReadParams(minread int, timeout float64) error { return nil }
+// SetReadTimeout is a no-op that satisfies the interface.
+func (p *FakePort) SetReadTimeout(time.Duration) error { return nil }
 
 // Compile-time check that FakePort implements the interface.
-var _ sers.SerialPort = (*FakePort)(nil)
+var _ serial.Port = (*FakePort)(nil)
 
 // NewTimeoutError returns an error whose Timeout() method reports true, useful
 // for scripting an idle-line read.
