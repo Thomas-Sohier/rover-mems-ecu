@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/nowplaying"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -35,16 +36,18 @@ var wsupgrader = websocket.Upgrader{
 
 // Server holds the web server dependencies.
 type Server struct {
-	state *ecu.State
+	state      *ecu.State
+	nowPlaying *nowplaying.Store
 }
 
-// NewServer creates a new web server with the given shared state.
-func NewServer(state *ecu.State) *Server {
-	return &Server{state: state}
+// NewServer creates a new web server with the given shared state and now-playing store.
+func NewServer(state *ecu.State, np *nowplaying.Store) *Server {
+	return &Server{state: state, nowPlaying: np}
 }
 
-// Run starts the HTTP/WebSocket server on the given bind address.
-func (s *Server) Run(ctx context.Context, addr string) {
+// buildRouter wires all routes and returns the handler. Separated so tests can
+// create the router without starting a listener.
+func (s *Server) buildRouter(ctx context.Context) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -56,6 +59,8 @@ func (s *Server) Run(ctx context.Context, addr string) {
 	{
 		api.GET("", s.apiStateHandler)
 		api.GET("/ports", s.apiPortsHandler)
+		api.GET("/nowplaying", s.apiNowPlayingHandler)
+		api.GET("/nowplaying/art", s.apiNowPlayingArtHandler)
 	}
 
 	router.GET("/", func(c *gin.Context) {
@@ -100,6 +105,17 @@ func (s *Server) Run(ctx context.Context, addr string) {
 	router.GET("/ws", func(c *gin.Context) {
 		s.wsHandler(c.Writer, c.Request)
 	})
+
+	router.GET("/ws/nowplaying", func(c *gin.Context) {
+		s.wsNowPlayingHandler(c.Writer, c.Request, ctx)
+	})
+
+	return router
+}
+
+// Run starts the HTTP/WebSocket server on the given bind address.
+func (s *Server) Run(ctx context.Context, addr string) {
+	router := s.buildRouter(ctx)
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -209,6 +225,99 @@ func (s *Server) wsIteration(conn *websocket.Conn) error {
 		return err
 	}
 
+	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.TextMessage, jsonData)
+}
+
+func (s *Server) apiNowPlayingHandler(c *gin.Context) {
+	snap := s.nowPlaying.Snapshot()
+	jsonData, err := json.Marshal(snap)
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	c.Data(http.StatusOK, "application/json", jsonData)
+}
+
+func (s *Server) apiNowPlayingArtHandler(c *gin.Context) {
+	_, jpeg, ok := s.nowPlaying.Art()
+	if !ok {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	c.Data(http.StatusOK, "image/jpeg", jpeg)
+}
+
+func (s *Server) wsNowPlayingHandler(w http.ResponseWriter, r *http.Request, ctx context.Context) {
+	conn, err := wsupgrader.Upgrade(w, r, nil)
+	if err != nil {
+		s.state.LogDebug("ws/nowplaying: upgrade failed:", err)
+		return
+	}
+	defer conn.Close()
+	conn.SetReadLimit(512)
+	// Listeners never write: keep the connection alive with pings, and extend
+	// the read deadline on each pong.
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(idleTimeout))
+	})
+
+	// Send current snapshot immediately.
+	if err := s.wsNowPlayingWrite(conn, s.nowPlaying.Snapshot()); err != nil {
+		return
+	}
+
+	ch, unsub := s.nowPlaying.Subscribe()
+	defer unsub()
+
+	// Reader goroutine: discard incoming messages, signal close on error.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	pingTicker := time.NewTicker(idleTimeout / 2)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-pingTicker.C:
+			if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				return
+			}
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		case snap, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := s.wsNowPlayingWrite(conn, snap); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) wsNowPlayingWrite(conn *websocket.Conn, snap nowplaying.Snapshot) error {
+	jsonData, err := json.Marshal(snap)
+	if err != nil {
+		return err
+	}
 	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 		return err
 	}

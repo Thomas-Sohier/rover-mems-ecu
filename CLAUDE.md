@@ -40,6 +40,20 @@ add to that list rather than disabling the linter when a serial call's error is 
 | `-serialport` | e.g. `/dev/ttyUSB0` | Serial port to use (auto-detected if omitted) |
 | `-ecutype` | `1.x`, `1.9`, `2J`, `rc5`, `3`, `fake` | ECU variant |
 | `-mode` | `prod` (default), `debug` | Enables verbose byte-level logging |
+| `-ble` | `true` | Enable the BLE GATT peripheral for the companion phone app |
+| `-blename` | `"Rover MEMS"` | BLE local device name advertised to the phone |
+
+## Now-playing / BLE companion
+
+`internal/nowplaying` is a pure Go package (no Bluetooth imports) that parses
+the companion phone's BLE write payloads (`ParseMetadata`, `ParseArtControl`,
+chunked art reassembly) and stores the current track state in `Store`.
+`Store.Subscribe` returns a buffered channel for push notifications; all state
+is mutex-protected. `internal/ble` is a thin glue layer that registers a BlueZ
+GATT peripheral via `tinygo.org/x/bluetooth` and delegates every write event
+to the corresponding `Store.Handle*` method. The web server's
+`/api/nowplaying`, `/api/nowplaying/art`, and `/ws/nowplaying` routes read from
+the same store.
 
 ## Architecture
 

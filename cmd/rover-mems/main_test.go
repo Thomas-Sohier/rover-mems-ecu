@@ -25,7 +25,7 @@ func TestParseFlags(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			state := ecu.NewState()
-			gotPort := parseFlags(state, tt.args)
+			gotPort, _, _ := parseFlags(state, tt.args)
 
 			if gotPort != tt.wantPort {
 				t.Errorf("httpPort = %q, want %q", gotPort, tt.wantPort)

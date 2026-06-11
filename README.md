@@ -95,3 +95,62 @@ It is intended to help people repair their own cars. There is no intent to make 
 profit or benefit from this in any way.
 
 Please use the GitHub Issue / Pull Request / Discussion options to get in touch.
+
+## Now Playing (BLE companion)
+
+The agent can act as a BLE GATT **peripheral** that accepts now-playing media
+metadata from a companion Android phone app over Bluetooth Low Energy. The phone
+scans for the head-unit, connects, and writes track and cover-art data. The
+agent reassembles the data and exposes it over HTTP and WebSocket so the
+dashboard can display what is playing.
+
+### GATT protocol
+
+| Characteristic | UUID | Direction | Payload |
+|---|---|---|---|
+| Service | `7f3a0001-9c44-4e6b-8d2a-5b1f00000001` | — | — |
+| Metadata | `7f3a0002-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"title","artist","album","state","position_ms","duration_ms","art_id"}`. `state` ∈ `playing\|paused\|stopped`; `art_id` is a string or `null`. |
+| Art control | `7f3a0003-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"art_id","total_bytes","chunk_count"}` — announces an upcoming cover-art upload. |
+| Art data | `7f3a0004-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write without response) | Binary: 2-byte big-endian chunk index + JPEG payload bytes. Chunks may arrive out of order; the agent reassembles by index. |
+
+### New CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `-ble` | `true` | Enable the BLE GATT peripheral. Set to `false` on dev machines without Bluetooth. |
+| `-blename` | `"Rover MEMS"` | Local device name advertised over BLE (visible to the phone during scanning). |
+
+### HTTP/WebSocket endpoints
+
+**`GET /api/nowplaying`** — JSON snapshot of current track state.
+
+```json
+{
+  "metadata": {
+    "title": "Dark Side of the Moon",
+    "artist": "Pink Floyd",
+    "album": "...",
+    "state": "playing",
+    "position_ms": 12345,
+    "duration_ms": 230000,
+    "art_id": "abc123"
+  },
+  "art_id": "abc123",
+  "has_art": true
+}
+```
+
+**`GET /api/nowplaying/art`** — raw `image/jpeg` bytes of the current cover art,
+or `404` when no art has been received yet.
+
+**`GET /ws/nowplaying`** — WebSocket. On connect the current snapshot is sent
+immediately as JSON; subsequent snapshots are pushed whenever the track or art
+changes. The connection idles out after 60 s of inactivity.
+
+### BlueZ requirements
+
+- BlueZ ≥ 5.50 with the D-Bus GATT peripheral API.
+- On a Raspberry Pi: ensure `bluetoothd` is running (`sudo systemctl start bluetooth`)
+  and the adapter is powered (`bluetoothctl power on`).
+- The agent keeps running without BLE if the adapter is unavailable (error is
+  logged and the flag `-ble=false` disables the attempt entirely).

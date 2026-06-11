@@ -5,13 +5,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"slices"
 	"syscall"
 	"time"
 
+	"rover-mems-agent/internal/ble"
 	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/nowplaying"
 	"rover-mems-agent/internal/serial"
 	"rover-mems-agent/internal/web"
 
@@ -33,18 +36,28 @@ func main() {
 	defer stop()
 
 	state := ecu.NewState()
-	httpPort := parseFlags(state, os.Args[1:])
+	npStore := nowplaying.NewStore()
+	httpPort, bleName, bleEnabled := parseFlags(state, os.Args[1:])
 	initializeAgent(state)
-	go web.NewServer(state).Run(ctx, httpPort)
+	if bleEnabled {
+		go func() {
+			if err := ble.Run(ctx, npStore, bleName); err != nil {
+				log.Printf("ble: %v", err)
+			}
+		}()
+	}
+	go web.NewServer(state, npStore).Run(ctx, httpPort)
 	runEventLoop(ctx, state)
 }
 
-func parseFlags(state *ecu.State, args []string) string {
+func parseFlags(state *ecu.State, args []string) (httpPort, bleName string, bleEnabled bool) {
 	fs := flag.NewFlagSet("rover-mems", flag.ExitOnError)
 	serialPortFlag := fs.String("serialport", "", "Serial port to use")
 	ecuTypeFlag := fs.String("ecutype", "", "ECU type to use (1.x, 1.9, 2J, rc5, 3, fake)")
 	modeFlag := fs.String("mode", "prod", "Operation mode: prod or debug")
 	portFlag := fs.Int("port", 8080, "HTTP server port")
+	bleFlag := fs.Bool("ble", true, "Enable BLE GATT peripheral for companion phone app")
+	bleNameFlag := fs.String("blename", "Rover MEMS", "BLE local device name for advertising")
 	_ = fs.Parse(args) // flag.ExitOnError: Parse never returns an error here
 
 	if *serialPortFlag != "" {
@@ -56,7 +69,7 @@ func parseFlags(state *ecu.State, args []string) string {
 	if *modeFlag == "debug" {
 		state.DebugMode = true
 	}
-	return fmt.Sprintf(":%d", *portFlag)
+	return fmt.Sprintf(":%d", *portFlag), *bleNameFlag, *bleFlag
 }
 
 func initializeAgent(state *ecu.State) {
