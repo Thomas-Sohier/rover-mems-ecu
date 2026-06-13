@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"rover-mems-agent/internal/ble"
+	"rover-mems-agent/internal/bluetooth"
 	"rover-mems-agent/internal/ecu"
 	"rover-mems-agent/internal/nowplaying"
 	"rover-mems-agent/internal/serial"
@@ -39,6 +40,9 @@ func main() {
 	npStore := nowplaying.NewStore()
 	httpPort, bleName, bleEnabled := parseFlags(state, os.Args[1:])
 	initializeAgent(state)
+	if err := bluetooth.SetupAgent(); err != nil {
+		log.Printf("bluetooth: setup agent: %v", err)
+	}
 	if bleEnabled {
 		go func() {
 			if err := ble.Run(ctx, npStore, bleName); err != nil {
