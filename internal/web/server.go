@@ -11,6 +11,7 @@ import (
 
 	"rover-mems-agent/internal/ecu"
 	"rover-mems-agent/internal/nowplaying"
+	"rover-mems-agent/internal/wifi"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -100,6 +101,22 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 		name := c.Param("name")
 		s.state.SetUserCommand(name)
 		c.String(http.StatusOK, "User command accepted %s", name)
+	})
+
+	router.POST("/wifi/enable", func(c *gin.Context) {
+		if err := wifi.EnableWifi(); err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		c.String(http.StatusOK, "wifi enabled")
+	})
+
+	router.POST("/wifi/disable", func(c *gin.Context) {
+		if err := wifi.DisableWifi(); err != nil {
+			c.String(http.StatusInternalServerError, err.Error())
+			return
+		}
+		c.String(http.StatusOK, "wifi disabled")
 	})
 
 	router.GET("/ws", func(c *gin.Context) {
