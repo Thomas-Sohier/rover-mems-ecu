@@ -321,8 +321,8 @@ func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
 func (m *MEMS2J) wakeUp() error {
 	time.Sleep(200 * time.Millisecond) // idle line high
 
-	m.sp.Break(25 * time.Millisecond)  // wake pulse: line low
-	time.Sleep(25 * time.Millisecond)  // line high
+	m.sp.Break(25 * time.Millisecond) // wake pulse: line low
+	time.Sleep(25 * time.Millisecond) // line high
 
 	time.Sleep(50 * time.Millisecond)
 
