@@ -10,13 +10,16 @@ import (
 
 	"tinygo.org/x/bluetooth"
 
+	"rover-mems-agent/internal/navigation"
+	"rover-mems-agent/internal/notification"
 	"rover-mems-agent/internal/nowplaying"
 )
 
-// Run starts the GATT peripheral, advertises the now-playing service, and
-// blocks until ctx is cancelled. It returns nil on clean shutdown and an error
-// if the adapter cannot be enabled or the service cannot be registered.
-func Run(ctx context.Context, store *nowplaying.Store, deviceName string) error {
+// Run starts the GATT peripheral, advertises the companion service (now-playing
+// plus navigation and alert characteristics), and blocks until ctx is
+// cancelled. It returns nil on clean shutdown and an error if the adapter
+// cannot be enabled or the service cannot be registered.
+func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Store, notifStore *notification.Store, deviceName string) error {
 	adapter := bluetooth.DefaultAdapter
 	if err := adapter.Enable(); err != nil {
 		return err
@@ -35,6 +38,22 @@ func Run(ctx context.Context, store *nowplaying.Store, deviceName string) error 
 		return err
 	}
 	artDataUUID, err := bluetooth.ParseUUID(nowplaying.ArtDataCharUUID)
+	if err != nil {
+		return err
+	}
+	navUUID, err := bluetooth.ParseUUID(navigation.NavCharUUID)
+	if err != nil {
+		return err
+	}
+	navIconCtrlUUID, err := bluetooth.ParseUUID(navigation.IconControlCharUUID)
+	if err != nil {
+		return err
+	}
+	navIconDataUUID, err := bluetooth.ParseUUID(navigation.IconDataCharUUID)
+	if err != nil {
+		return err
+	}
+	alertUUID, err := bluetooth.ParseUUID(notification.AlertCharUUID)
 	if err != nil {
 		return err
 	}
@@ -66,6 +85,42 @@ func Run(ctx context.Context, store *nowplaying.Store, deviceName string) error 
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
 					if err := store.HandleArtChunk(value); err != nil {
 						log.Printf("ble: HandleArtChunk: %v", err)
+					}
+				},
+			},
+			{
+				UUID:  navUUID,
+				Flags: bluetooth.CharacteristicWritePermission,
+				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					if err := navStore.HandleNavigation(value); err != nil {
+						log.Printf("ble: HandleNavigation: %v", err)
+					}
+				},
+			},
+			{
+				UUID:  navIconCtrlUUID,
+				Flags: bluetooth.CharacteristicWritePermission,
+				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					if err := navStore.HandleIconControl(value); err != nil {
+						log.Printf("ble: HandleIconControl: %v", err)
+					}
+				},
+			},
+			{
+				UUID:  navIconDataUUID,
+				Flags: bluetooth.CharacteristicWriteWithoutResponsePermission,
+				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					if err := navStore.HandleIconChunk(value); err != nil {
+						log.Printf("ble: HandleIconChunk: %v", err)
+					}
+				},
+			},
+			{
+				UUID:  alertUUID,
+				Flags: bluetooth.CharacteristicWritePermission,
+				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					if err := notifStore.HandleAlert(value); err != nil {
+						log.Printf("ble: HandleAlert: %v", err)
 					}
 				},
 			},

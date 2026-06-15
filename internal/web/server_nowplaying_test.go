@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/navigation"
+	"rover-mems-agent/internal/notification"
 	"rover-mems-agent/internal/nowplaying"
 
 	"github.com/gorilla/websocket"
@@ -18,7 +20,7 @@ import (
 func TestAPINewPlaying_EmptySnapshot(t *testing.T) {
 	state := ecu.NewState()
 	np := nowplaying.NewStore()
-	srv := NewServer(state, np)
+	srv := NewServer(state, np, navigation.NewStore(), notification.NewStore())
 
 	gin := srv.buildRouter(context.Background())
 	w := httptest.NewRecorder()
@@ -44,7 +46,7 @@ func TestWSNewPlaying_InitialAndPushed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv := NewServer(state, np)
+	srv := NewServer(state, np, navigation.NewStore(), notification.NewStore())
 	ts := httptest.NewServer(srv.buildRouter(ctx))
 	defer ts.Close()
 
