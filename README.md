@@ -112,6 +112,15 @@ dashboard can display what is playing.
 | Metadata | `7f3a0002-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"title","artist","album","state","position_ms","duration_ms","art_id"}`. `state` ∈ `playing\|paused\|stopped`; `art_id` is a string or `null`. |
 | Art control | `7f3a0003-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"art_id","total_bytes","chunk_count"}` — announces an upcoming cover-art upload. |
 | Art data | `7f3a0004-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write without response) | Binary: 2-byte big-endian chunk index + JPEG payload bytes. Chunks may arrive out of order; the agent reassembles by index. |
+| Navigation | `7f3a0005-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"active","instruction","distance","eta","maneuver_icon_id"}`. `active` is a bool; the rest are string-or-`null`. `active:false` clears the navigation display. |
+| Maneuver-icon control | `7f3a0006-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"maneuver_icon_id","total_bytes","chunk_count"}` — announces an upcoming maneuver-icon upload. |
+| Maneuver-icon data | `7f3a0007-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write without response) | Binary: 2-byte big-endian chunk index + **PNG** payload bytes (alpha-bearing, for recoloring). Reassembled by index. |
+| Alert | `7f3a0008-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"app","title","text","posted_at"}` — a one-shot forwarded notification. `posted_at` is Unix epoch ms. |
+
+Navigation and alerts are separate concepts: navigation is a single
+continuously-replacing state, while an alert is a fire-once event. See
+[`docs/companion-notifications-navigation.md`](docs/companion-notifications-navigation.md)
+for the full design.
 
 ### New CLI flags
 
@@ -146,6 +155,21 @@ or `404` when no art has been received yet.
 **`GET /ws/nowplaying`** — WebSocket. On connect the current snapshot is sent
 immediately as JSON; subsequent snapshots are pushed whenever the track or art
 changes. The connection idles out after 60 s of inactivity.
+
+**`GET /api/navigation`** — JSON snapshot of the current navigation state:
+`{"navigation":{...},"icon_id","has_icon"}`.
+
+**`GET /api/navigation/icon`** — raw `image/png` bytes of the current maneuver
+icon, or `404` when none has been received.
+
+**`GET /ws/navigation`** — WebSocket. Sends the current snapshot on connect, then
+pushes on every navigation/icon change. Fetch the icon from
+`/api/navigation/icon` when `has_icon` is true.
+
+**`GET /api/notifications`** — the most recent forwarded alert, or `404` if none.
+
+**`GET /ws/notifications`** — WebSocket. Alerts are fire-once, so there is **no**
+initial snapshot; each alert posted while connected is pushed as JSON.
 
 ### BlueZ requirements
 

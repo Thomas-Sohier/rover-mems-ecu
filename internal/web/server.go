@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/navigation"
+	"rover-mems-agent/internal/notification"
 	"rover-mems-agent/internal/nowplaying"
 	"rover-mems-agent/internal/wifi"
 
@@ -37,13 +39,16 @@ var wsupgrader = websocket.Upgrader{
 
 // Server holds the web server dependencies.
 type Server struct {
-	state      *ecu.State
-	nowPlaying *nowplaying.Store
+	state        *ecu.State
+	nowPlaying   *nowplaying.Store
+	navigation   *navigation.Store
+	notification *notification.Store
 }
 
-// NewServer creates a new web server with the given shared state and now-playing store.
-func NewServer(state *ecu.State, np *nowplaying.Store) *Server {
-	return &Server{state: state, nowPlaying: np}
+// NewServer creates a new web server with the given shared state and the
+// now-playing, navigation, and notification stores.
+func NewServer(state *ecu.State, np *nowplaying.Store, nav *navigation.Store, notif *notification.Store) *Server {
+	return &Server{state: state, nowPlaying: np, navigation: nav, notification: notif}
 }
 
 // buildRouter wires all routes and returns the handler. Separated so tests can
@@ -62,6 +67,9 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 		api.GET("/ports", s.apiPortsHandler)
 		api.GET("/nowplaying", s.apiNowPlayingHandler)
 		api.GET("/nowplaying/art", s.apiNowPlayingArtHandler)
+		api.GET("/navigation", s.apiNavigationHandler)
+		api.GET("/navigation/icon", s.apiNavigationIconHandler)
+		api.GET("/notifications", s.apiNotificationsHandler)
 	}
 
 	router.GET("/", func(c *gin.Context) {
@@ -125,6 +133,14 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 
 	router.GET("/ws/nowplaying", func(c *gin.Context) {
 		s.wsNowPlayingHandler(c.Writer, c.Request, ctx)
+	})
+
+	router.GET("/ws/navigation", func(c *gin.Context) {
+		s.wsNavigationHandler(c.Writer, c.Request, ctx)
+	})
+
+	router.GET("/ws/notifications", func(c *gin.Context) {
+		s.wsNotificationsHandler(c.Writer, c.Request, ctx)
 	})
 
 	return router
@@ -332,6 +348,172 @@ func (s *Server) wsNowPlayingHandler(w http.ResponseWriter, r *http.Request, ctx
 
 func (s *Server) wsNowPlayingWrite(conn *websocket.Conn, snap nowplaying.Snapshot) error {
 	jsonData, err := json.Marshal(snap)
+	if err != nil {
+		return err
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.TextMessage, jsonData)
+}
+
+// --- Navigation ---
+
+func (s *Server) apiNavigationHandler(c *gin.Context) {
+	snap := s.navigation.Snapshot()
+	jsonData, err := json.Marshal(snap)
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	c.Data(http.StatusOK, "application/json", jsonData)
+}
+
+func (s *Server) apiNavigationIconHandler(c *gin.Context) {
+	_, png, ok := s.navigation.Icon()
+	if !ok {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	c.Data(http.StatusOK, "image/png", png)
+}
+
+// wsNavigationHandler streams navigation snapshots. Like /ws/nowplaying it
+// pushes the current snapshot on connect, then every change. The PNG maneuver
+// icon itself is fetched separately from /api/navigation/icon; the snapshot
+// carries icon_id and has_icon.
+func (s *Server) wsNavigationHandler(w http.ResponseWriter, r *http.Request, ctx context.Context) {
+	conn, err := wsupgrader.Upgrade(w, r, nil)
+	if err != nil {
+		s.state.LogDebug("ws/navigation: upgrade failed:", err)
+		return
+	}
+	defer conn.Close()
+	conn.SetReadLimit(512)
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(idleTimeout))
+	})
+
+	if err := s.wsJSONWrite(conn, s.navigation.Snapshot()); err != nil {
+		return
+	}
+
+	ch, unsub := s.navigation.Subscribe()
+	defer unsub()
+
+	done := s.wsReaderDone(conn)
+	pingTicker := time.NewTicker(idleTimeout / 2)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-pingTicker.C:
+			if err := s.wsPing(conn); err != nil {
+				return
+			}
+		case snap, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := s.wsJSONWrite(conn, snap); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// --- Notifications (alerts) ---
+
+func (s *Server) apiNotificationsHandler(c *gin.Context) {
+	alert, ok := s.notification.Last()
+	if !ok {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	jsonData, err := json.Marshal(alert)
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	c.Data(http.StatusOK, "application/json", jsonData)
+}
+
+// wsNotificationsHandler streams alerts as they arrive. Alerts are fire-once
+// events, so — unlike navigation/now-playing — no initial snapshot is sent on
+// connect; only alerts posted while connected are delivered.
+func (s *Server) wsNotificationsHandler(w http.ResponseWriter, r *http.Request, ctx context.Context) {
+	conn, err := wsupgrader.Upgrade(w, r, nil)
+	if err != nil {
+		s.state.LogDebug("ws/notifications: upgrade failed:", err)
+		return
+	}
+	defer conn.Close()
+	conn.SetReadLimit(512)
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(idleTimeout))
+	})
+
+	ch, unsub := s.notification.Subscribe()
+	defer unsub()
+
+	done := s.wsReaderDone(conn)
+	pingTicker := time.NewTicker(idleTimeout / 2)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-pingTicker.C:
+			if err := s.wsPing(conn); err != nil {
+				return
+			}
+		case alert, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := s.wsJSONWrite(conn, alert); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// --- shared WebSocket helpers (listen-only streams) ---
+
+// wsReaderDone starts a goroutine that discards inbound messages and closes the
+// returned channel when the peer goes away, so a write loop can detect closure.
+func (s *Server) wsReaderDone(conn *websocket.Conn) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+	return done
+}
+
+func (s *Server) wsPing(conn *websocket.Conn) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.PingMessage, nil)
+}
+
+func (s *Server) wsJSONWrite(conn *websocket.Conn, v any) error {
+	jsonData, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}

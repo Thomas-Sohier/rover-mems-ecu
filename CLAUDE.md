@@ -55,6 +55,15 @@ to the corresponding `Store.Handle*` method. The web server's
 `/api/nowplaying`, `/api/nowplaying/art`, and `/ws/nowplaying` routes read from
 the same store.
 
+`internal/navigation` and `internal/notification` are two more pure packages
+following the same pattern, for the companion's turn-by-turn navigation stream
+(chars `…0005/0006/0007`) and one-shot alert stream (char `…0008`). They are
+kept separate on purpose: navigation is a single replacing state (snapshot +
+PNG maneuver icon, like now-playing), alerts are fire-once events (no replay to
+late subscribers). They expose `/api/navigation`, `/api/navigation/icon`,
+`/ws/navigation`, `/api/notifications`, and `/ws/notifications`. `ble.Run` now
+takes all three stores. See `docs/companion-notifications-navigation.md`.
+
 ## Architecture
 
 
