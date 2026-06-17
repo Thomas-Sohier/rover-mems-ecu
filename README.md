@@ -116,11 +116,19 @@ dashboard can display what is playing.
 | Maneuver-icon control | `7f3a0006-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"maneuver_icon_id","total_bytes","chunk_count"}` — announces an upcoming maneuver-icon upload. |
 | Maneuver-icon data | `7f3a0007-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write without response) | Binary: 2-byte big-endian chunk index + **PNG** payload bytes (alpha-bearing, for recoloring). Reassembled by index. |
 | Alert | `7f3a0008-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON: `{"app","title","text","posted_at"}` — a one-shot forwarded notification. `posted_at` is Unix epoch ms. |
+| Head-unit command | `7f3a0009-9c44-4e6b-8d2a-5b1f00000001` | phone → head-unit (write) | UTF-8 JSON control command: `set_current_view` / `set_view_visibility` / `set_setting_value` / `request_catalog`. Fire-and-forget. |
+| Head-unit catalog | `7f3a000a-9c44-4e6b-8d2a-5b1f00000001` | head-unit → phone (notify) | Fragmented catalog JSON `{"views":[…],"settings":[…]}`. Each notification is `[2-byte index][2-byte count][UTF-8 fragment]`. |
 
 Navigation and alerts are separate concepts: navigation is a single
 continuously-replacing state, while an alert is a fire-once event. See
 [`docs/companion-notifications-navigation.md`](docs/companion-notifications-navigation.md)
 for the full design.
+
+Remote control (the head-unit command/catalog characteristics) is **bidirectional
+and proxied**: the on-device frontend owns the catalog and the agent relays it to
+the phone, relaying the phone's commands back. The catalog notification is the
+first head-unit → phone characteristic. See
+[`docs/companion-headunit-control.md`](docs/companion-headunit-control.md).
 
 ### New CLI flags
 

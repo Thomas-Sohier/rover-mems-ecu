@@ -61,8 +61,21 @@ following the same pattern, for the companion's turn-by-turn navigation stream
 kept separate on purpose: navigation is a single replacing state (snapshot +
 PNG maneuver icon, like now-playing), alerts are fire-once events (no replay to
 late subscribers). They expose `/api/navigation`, `/api/navigation/icon`,
-`/ws/navigation`, `/api/notifications`, and `/ws/notifications`. `ble.Run` now
-takes all three stores. See `docs/companion-notifications-navigation.md`.
+`/ws/navigation`, `/api/notifications`, and `/ws/notifications`. See
+`docs/companion-notifications-navigation.md`.
+
+`internal/headunit` is the remote-control proxy: the phone lists/switches the
+head-unit's views and reads/edits its settings (command char `…0009`, notify
+char `…000a`). Unlike the streams above, data flows **both ways** and the agent
+is a transparent relay — the on-device frontend is the single source of truth.
+The frontend pushes its self-describing catalog over the bidirectional
+`/ws/headunit` socket; the agent caches it, fragments it, and notifies the phone
+on `…000a`; the phone's commands on `…0009` are relayed back to the frontend.
+The catalog notification framing is `[2-byte index][2-byte count][JSON
+fragment]`. `/api/headunit` serves the cached catalog. The agent does not
+interpret view/setting semantics; the frontend enforces the "current view is
+always visible" invariant and re-pushes. `ble.Run` and `web.NewServer` take all
+four stores. See `docs/companion-headunit-control.md`.
 
 ## Architecture
 

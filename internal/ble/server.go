@@ -7,19 +7,21 @@ package ble
 import (
 	"context"
 	"log"
+	"time"
 
 	"tinygo.org/x/bluetooth"
 
+	"rover-mems-agent/internal/headunit"
 	"rover-mems-agent/internal/navigation"
 	"rover-mems-agent/internal/notification"
 	"rover-mems-agent/internal/nowplaying"
 )
 
 // Run starts the GATT peripheral, advertises the companion service (now-playing
-// plus navigation and alert characteristics), and blocks until ctx is
-// cancelled. It returns nil on clean shutdown and an error if the adapter
+// plus navigation, alert, and remote-control characteristics), and blocks until
+// ctx is cancelled. It returns nil on clean shutdown and an error if the adapter
 // cannot be enabled or the service cannot be registered.
-func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Store, notifStore *notification.Store, deviceName string) error {
+func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Store, notifStore *notification.Store, huStore *headunit.Store, deviceName string) error {
 	adapter := bluetooth.DefaultAdapter
 	if err := adapter.Enable(); err != nil {
 		return err
@@ -57,6 +59,18 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 	if err != nil {
 		return err
 	}
+	huCmdUUID, err := bluetooth.ParseUUID(headunit.CommandCharUUID)
+	if err != nil {
+		return err
+	}
+	huCatalogUUID, err := bluetooth.ParseUUID(headunit.CatalogCharUUID)
+	if err != nil {
+		return err
+	}
+
+	// catalogChar is populated by AddService; we push catalog notifications
+	// through it from the goroutine below.
+	var catalogChar bluetooth.Characteristic
 
 	svc := bluetooth.Service{
 		UUID: serviceUUID,
@@ -124,12 +138,30 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 					}
 				},
 			},
+			{
+				UUID:  huCmdUUID,
+				Flags: bluetooth.CharacteristicWritePermission,
+				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					if err := huStore.HandleCommand(value); err != nil {
+						log.Printf("ble: HandleCommand: %v", err)
+					}
+				},
+			},
+			{
+				Handle: &catalogChar,
+				UUID:   huCatalogUUID,
+				Flags:  bluetooth.CharacteristicNotifyPermission,
+			},
 		},
 	}
 
 	if err := adapter.AddService(&svc); err != nil {
 		return err
 	}
+
+	// Relay catalog updates from the frontend (via the store) to the phone as
+	// fragmented notifications.
+	go runCatalogNotifier(ctx, huStore, &catalogChar)
 
 	adv := adapter.DefaultAdvertisement()
 	if err := adv.Configure(bluetooth.AdvertisementOptions{
@@ -148,4 +180,36 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 		log.Printf("ble: stop advertising: %v", err)
 	}
 	return nil
+}
+
+// interFragmentDelay paces catalog notifications so BlueZ does not coalesce
+// rapid value-property updates into a single notification.
+const interFragmentDelay = 3 * time.Millisecond
+
+// runCatalogNotifier subscribes to catalog updates and writes each as ordered,
+// fragmented BLE notifications on the catalog characteristic until ctx is done.
+func runCatalogNotifier(ctx context.Context, huStore *headunit.Store, catalogChar *bluetooth.Characteristic) {
+	ch, unsub := huStore.SubscribeCatalog()
+	defer unsub()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case catalog, ok := <-ch:
+			if !ok {
+				return
+			}
+			for _, frame := range headunit.BuildFrames(catalog, headunit.MaxFragmentPayload) {
+				if _, err := catalogChar.Write(frame); err != nil {
+					log.Printf("ble: catalog notify: %v", err)
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(interFragmentDelay):
+				}
+			}
+		}
+	}
 }

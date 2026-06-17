@@ -15,6 +15,7 @@ import (
 	"rover-mems-agent/internal/ble"
 	"rover-mems-agent/internal/bluetooth"
 	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/headunit"
 	"rover-mems-agent/internal/navigation"
 	"rover-mems-agent/internal/notification"
 	"rover-mems-agent/internal/nowplaying"
@@ -42,6 +43,7 @@ func main() {
 	npStore := nowplaying.NewStore()
 	navStore := navigation.NewStore()
 	notifStore := notification.NewStore()
+	huStore := headunit.NewStore()
 	httpPort, bleName, bleEnabled := parseFlags(state, os.Args[1:])
 	initializeAgent(state)
 	if err := bluetooth.SetupAgent(); err != nil {
@@ -49,12 +51,12 @@ func main() {
 	}
 	if bleEnabled {
 		go func() {
-			if err := ble.Run(ctx, npStore, navStore, notifStore, bleName); err != nil {
+			if err := ble.Run(ctx, npStore, navStore, notifStore, huStore, bleName); err != nil {
 				log.Printf("ble: %v", err)
 			}
 		}()
 	}
-	go web.NewServer(state, npStore, navStore, notifStore).Run(ctx, httpPort)
+	go web.NewServer(state, npStore, navStore, notifStore, huStore).Run(ctx, httpPort)
 	runEventLoop(ctx, state)
 }
 

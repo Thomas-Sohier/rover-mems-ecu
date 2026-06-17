@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/headunit"
 	"rover-mems-agent/internal/navigation"
 	"rover-mems-agent/internal/notification"
 	"rover-mems-agent/internal/nowplaying"
@@ -18,7 +19,7 @@ import (
 )
 
 func newTestServer(nav *navigation.Store, notif *notification.Store) *Server {
-	return NewServer(ecu.NewState(), nowplaying.NewStore(), nav, notif)
+	return NewServer(ecu.NewState(), nowplaying.NewStore(), nav, notif, headunit.NewStore())
 }
 
 func TestAPINavigation_EmptySnapshot(t *testing.T) {

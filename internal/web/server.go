@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"rover-mems-agent/internal/ecu"
+	"rover-mems-agent/internal/headunit"
 	"rover-mems-agent/internal/navigation"
 	"rover-mems-agent/internal/notification"
 	"rover-mems-agent/internal/nowplaying"
@@ -43,12 +44,13 @@ type Server struct {
 	nowPlaying   *nowplaying.Store
 	navigation   *navigation.Store
 	notification *notification.Store
+	headunit     *headunit.Store
 }
 
 // NewServer creates a new web server with the given shared state and the
-// now-playing, navigation, and notification stores.
-func NewServer(state *ecu.State, np *nowplaying.Store, nav *navigation.Store, notif *notification.Store) *Server {
-	return &Server{state: state, nowPlaying: np, navigation: nav, notification: notif}
+// now-playing, navigation, notification, and head-unit-control stores.
+func NewServer(state *ecu.State, np *nowplaying.Store, nav *navigation.Store, notif *notification.Store, hu *headunit.Store) *Server {
+	return &Server{state: state, nowPlaying: np, navigation: nav, notification: notif, headunit: hu}
 }
 
 // buildRouter wires all routes and returns the handler. Separated so tests can
@@ -70,6 +72,7 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 		api.GET("/navigation", s.apiNavigationHandler)
 		api.GET("/navigation/icon", s.apiNavigationIconHandler)
 		api.GET("/notifications", s.apiNotificationsHandler)
+		api.GET("/headunit", s.apiHeadUnitHandler)
 	}
 
 	router.GET("/", func(c *gin.Context) {
@@ -141,6 +144,10 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 
 	router.GET("/ws/notifications", func(c *gin.Context) {
 		s.wsNotificationsHandler(c.Writer, c.Request, ctx)
+	})
+
+	router.GET("/ws/headunit", func(c *gin.Context) {
+		s.wsHeadUnitHandler(c.Writer, c.Request, ctx)
 	})
 
 	return router
@@ -485,6 +492,82 @@ func (s *Server) wsNotificationsHandler(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// --- Head-unit remote control ---
+
+// apiHeadUnitHandler returns the cached catalog reported by the frontend, or 404
+// when none has been reported yet.
+func (s *Server) apiHeadUnitHandler(c *gin.Context) {
+	catalog, ok := s.headunit.Catalog()
+	if !ok {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	c.Data(http.StatusOK, "application/json", catalog)
+}
+
+// wsHeadUnitHandler bridges the on-device frontend to the phone. It is
+// bidirectional: the frontend pushes its catalog (JSON object) as text messages,
+// which are cached and relayed to the phone over BLE; the agent writes the
+// phone's commands (JSON) to the socket so the frontend can apply them and push
+// an updated catalog back. The frontend is the single source of truth.
+func (s *Server) wsHeadUnitHandler(w http.ResponseWriter, r *http.Request, ctx context.Context) {
+	conn, err := wsupgrader.Upgrade(w, r, nil)
+	if err != nil {
+		s.state.LogDebug("ws/headunit: upgrade failed:", err)
+		return
+	}
+	defer conn.Close()
+	conn.SetReadLimit(64 * 1024)
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(idleTimeout))
+	})
+
+	cmdCh, unsub := s.headunit.SubscribeCommands()
+	defer unsub()
+
+	// Reader goroutine: each inbound message is a catalog update from the
+	// frontend. Closes done on read error (peer gone).
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+			return
+		}
+		for {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := s.headunit.SetCatalog(message); err != nil {
+				s.state.LogDebugf("ws/headunit: catalog rejected: %v", err)
+			}
+		}
+	}()
+
+	pingTicker := time.NewTicker(idleTimeout / 2)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-pingTicker.C:
+			if err := s.wsPing(conn); err != nil {
+				return
+			}
+		case cmd, ok := <-cmdCh:
+			if !ok {
+				return
+			}
+			if err := s.wsBytesWrite(conn, cmd); err != nil {
+				return
+			}
+		}
+	}
+}
+
 // --- shared WebSocket helpers (listen-only streams) ---
 
 // wsReaderDone starts a goroutine that discards inbound messages and closes the
@@ -510,6 +593,14 @@ func (s *Server) wsPing(conn *websocket.Conn) error {
 		return err
 	}
 	return conn.WriteMessage(websocket.PingMessage, nil)
+}
+
+// wsBytesWrite writes a pre-serialized JSON payload as a text message.
+func (s *Server) wsBytesWrite(conn *websocket.Conn, payload []byte) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.TextMessage, payload)
 }
 
 func (s *Server) wsJSONWrite(conn *websocket.Conn, v any) error {
