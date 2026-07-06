@@ -246,7 +246,7 @@ func (m *MEMS19) send5BaudWakeup() {
 
 	// frame: start bit (0), address LSB-first, stop bit (1).
 	frame := []int{0}
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		frame = append(frame, (ecuAddress>>i)&1)
 	}
 	frame = append(frame, 1)
