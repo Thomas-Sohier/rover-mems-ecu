@@ -102,8 +102,15 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 		c.String(http.StatusOK, "ECU type set to %s", name)
 	})
 
-	router.POST("/serialPort/:name", func(c *gin.Context) {
-		name := c.Param("name")
+	// Serial-port names are full device paths (e.g. /dev/ttyUSB0) whose slashes
+	// cannot travel through a :name path param, so the port is passed as a query
+	// value instead.
+	router.POST("/serialPort", func(c *gin.Context) {
+		name := c.Query("name")
+		if name == "" {
+			c.String(http.StatusBadRequest, "missing port name")
+			return
+		}
 		s.state.SetSelectedSerialPort(name)
 		c.String(http.StatusOK, "Serial port set to %s", name)
 	})
@@ -255,7 +262,7 @@ func (s *Server) wsIteration(conn *websocket.Conn) error {
 		"error":              errMsg,
 		"ecuData":            snap.Data,
 		"agentVersion":       snap.AgentVersion,
-		"timestamp":          time.Now().String(),
+		"timestamp":          time.Now().Format(time.RFC3339),
 		"serialPorts":        snap.SerialPorts,
 		"selectedSerialPort": snap.SelectedSerialPort,
 		"logLines":           snap.LogLines,
