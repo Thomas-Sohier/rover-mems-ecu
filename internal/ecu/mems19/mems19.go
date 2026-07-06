@@ -60,6 +60,9 @@ func NewMEMS19(state *ecu.State, cfg ecu.Config) (ecu.ECU, error) {
 // non-blocking for the fast data loop.
 func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	m.state.LogDebug("Connecting to MEMS 1.9 ECU")
+	m.state.Lock()
+	m.state.Connected = false
+	m.state.Unlock()
 
 	sp, err := openPort(portName, 9600, serial.NoParity)
 	if err != nil {
@@ -79,8 +82,7 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	m.send5BaudWakeup()
 	m.state.LogDebug("1.9 5-baud wake-up sent, starting keyword handshake")
 
-	// The handshake is best-effort, matching the reference Android app
-	// (rover-mems-android-application UsbService.wakeUp19Ecu): initEcu discards
+	// The handshake is best-effort : initEcu discards
 	// wakeUp19Ecu's return value and falls through to the 0xCA init regardless of
 	// whether the keyword/echo exchange actually completed. Some K-line adapters
 	// buffer the echo differently or clock in a stray byte before 0x7C, which
@@ -92,8 +94,7 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	}
 
 	// Drain the handshake leftovers (our 0x7C echo, the ECU's 0xE9) so the shared
-	// mems1x loop's K-line echo tracking starts clean on its own 0xCA — the app
-	// does the equivalent with dataBufferSize = 0 before sending 0xCA.
+	// mems1x loop's K-line echo tracking starts clean on its own 0xCA
 	if err := sp.SetReadTimeout(0); err != nil {
 		sp.Close()
 		return err
@@ -120,43 +121,26 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 // fall-back for the common KW2=0x83 case (0x83 ^ 0xFF = 0x7C) if we never see a
 // clean 0x55 frame within the timeout.
 func (m *MEMS19) handleWakeUpHandshake() error {
-	buffer := make([]byte, 0)
-	tmp := make([]byte, 128)
-
 	challengeResponse := byte(0x7C)
 
-	start := time.Now()
-	for time.Since(start) < 2000*time.Millisecond {
-		n, err := m.sp.Read(tmp)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			buffer = append(buffer, tmp[:n]...)
-			m.state.LogDebugf("1.9 handshake read %d byte(s), buffer now %X", n, buffer)
-
-			for len(buffer) > 0 && buffer[0] == 0x00 {
-				buffer = buffer[1:]
-			}
-
-			if len(buffer) >= 3 && buffer[0] == 0x55 {
-				kw1, kw2 := buffer[1], buffer[2]
-				m.state.LogDebugf("1.9 ECU Woke Response received (55 %02X %02X)", kw1, kw2)
-				challengeResponse = kw2 ^ 0xFF
-				break
-			}
-		}
+	buf, ok, err := m.readUntil("handshake", 2*time.Second, func(b []byte) bool {
+		return len(b) >= 3 && b[0] == 0x55
+	})
+	if err != nil {
+		return err
 	}
-
-	if challengeResponse == 0x7C {
-		m.state.LogDebug("1.9 ECU: sending challenge 0x7C (default or derived from KW2=0x83)")
+	if ok {
+		kw1, kw2 := buf[1], buf[2]
+		m.state.LogDebugf("1.9 ECU Woke Response received (55 %02X %02X)", kw1, kw2)
+		challengeResponse = kw2 ^ 0xFF
+	} else {
+		m.state.LogDebug("1.9 ECU: no clean 0x55 frame within timeout; sending fallback challenge 0x7C (assumes KW2=0x83)")
 	}
 
 	sleep(25 * time.Millisecond)
 
 	m.state.LogDebugf("Sending Challenge Response: 0x%02X", challengeResponse)
-	_, err := m.sp.Write([]byte{challengeResponse})
-	if err != nil {
+	if _, err := m.sp.Write([]byte{challengeResponse}); err != nil {
 		return err
 	}
 
@@ -173,34 +157,50 @@ func (m *MEMS19) handleWakeUpHandshake() error {
 // suppress the TX echo, in which case we only see [0xE9]. We accept either form
 // so the handshake works across both adapter types.
 func (m *MEMS19) waitForChallengeEcho(expectedEcho byte) error {
-	buffer := make([]byte, 0)
+	_, ok, err := m.readUntil("challenge-echo", 2*time.Second, func(b []byte) bool {
+		// With TX echo the line reads back [~KW2, 0xE9]; adapters that suppress
+		// the echo give just [0xE9]. Either confirms the link is up.
+		return (len(b) >= 2 && b[0] == expectedEcho && b[1] == 0xE9) ||
+			(len(b) >= 1 && b[0] == 0xE9)
+	})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("timeout waiting for challenge echo (0xE9)")
+	}
+	m.state.LogDebug("1.9 ECU init handshake complete")
+	return nil
+}
+
+// readUntil polls the serial port until match reports success or timeout
+// elapses. Before each check it strips leading 0x00 framing bytes, which the
+// K-line can clock in as it leaves the break condition. It returns the
+// accumulated buffer and whether match succeeded before the deadline; a read
+// error aborts immediately. label names the exchange in debug traces.
+func (m *MEMS19) readUntil(label string, timeout time.Duration, match func(buf []byte) bool) ([]byte, bool, error) {
+	var buf []byte
 	tmp := make([]byte, 128)
 
-	start := time.Now()
-	for time.Since(start) < 2000*time.Millisecond {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
 		n, err := m.sp.Read(tmp)
 		if err != nil {
-			return err
+			return buf, false, err
 		}
-		if n > 0 {
-			buffer = append(buffer, tmp[:n]...)
-			m.state.LogDebugf("1.9 challenge-echo read %d byte(s), buffer now %X (expecting %02X E9)", n, buffer, expectedEcho)
-
-			for len(buffer) > 0 && buffer[0] == 0x00 {
-				buffer = buffer[1:]
-			}
-
-			if len(buffer) >= 2 && buffer[0] == expectedEcho && buffer[1] == 0xE9 {
-				m.state.LogDebug("1.9 ECU init handshake complete (with TX echo)")
-				return nil
-			}
-			if len(buffer) >= 1 && buffer[0] == 0xE9 {
-				m.state.LogDebug("1.9 ECU init handshake complete (no TX echo)")
-				return nil
-			}
+		if n == 0 {
+			continue
+		}
+		buf = append(buf, tmp[:n]...)
+		for len(buf) > 0 && buf[0] == 0x00 {
+			buf = buf[1:]
+		}
+		m.state.LogDebugf("1.9 %s read %d byte(s), buffer now %X", label, n, buf)
+		if match(buf) {
+			return buf, true, nil
 		}
 	}
-	return errors.New("timeout waiting for challenge echo (0xE9)")
+	return buf, false, nil
 }
 
 // flushInput drains any bytes sitting in the OS receive buffer before we start
@@ -246,7 +246,7 @@ func (m *MEMS19) send5BaudWakeup() {
 
 	// frame: start bit (0), address LSB-first, stop bit (1).
 	frame := []int{0}
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		frame = append(frame, (ecuAddress>>i)&1)
 	}
 	frame = append(frame, 1)
