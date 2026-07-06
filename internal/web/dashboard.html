@@ -150,6 +150,45 @@
   .btn-clear:hover { color: var(--text); border-color: var(--text); }
 
   .ts { font-size: 10px; color: var(--muted); }
+
+  /* ── Actions tab ── */
+  .action-panel {
+    display: flex; flex-wrap: wrap; gap: 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px;
+  }
+  .action-field { display: flex; align-items: center; gap: 8px; }
+  .action-field label { font-size: 11px; color: var(--muted); min-width: 74px; }
+  .action-field select {
+    background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; font-family: inherit; font-size: 12px;
+  }
+  .action-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+  .action-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 9px 12px;
+  }
+  .action-row .a-label { font-size: 12px; color: var(--text); }
+  .action-row .a-btns { display: flex; gap: 6px; }
+  .btn-action {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    cursor: pointer; font-family: inherit; font-size: 11px; font-weight: 600;
+    padding: 6px 12px; border-radius: 6px; transition: border-color .15s, color .15s;
+  }
+  .btn-action:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-action.danger:hover { border-color: var(--red); color: var(--red); }
+  .btn-action.pm { min-width: 34px; }
+
+  .toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px);
+    padding: 10px 18px; border-radius: 8px; font-size: 12px; font-weight: 500;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 50;
+    border: 1px solid var(--border); background: var(--surface2); color: var(--text);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.ok  { border-color: var(--green); color: var(--green); }
+  .toast.err { border-color: var(--red);   color: var(--red); }
 </style>
 </head>
 <body>
@@ -169,6 +208,7 @@
 
 <nav>
   <button class="active" onclick="showTab('dashboard', this)">Dashboard</button>
+  <button onclick="showTab('actions', this)">Actions</button>
   <button onclick="showTab('debug', this)">Debug</button>
 </nav>
 
@@ -439,6 +479,46 @@
 
 </div><!-- /tab-dashboard -->
 
+<!-- ═══════════════ ACTIONS TAB ═══════════════ -->
+<div id="tab-actions" class="tab">
+
+  <div class="section-title">Configuration</div>
+  <div class="action-panel">
+    <div class="action-field">
+      <label>ECU Type</label>
+      <select id="sel-ecu"></select>
+      <button class="btn-action" onclick="applyEcu()">Apply</button>
+    </div>
+    <div class="action-field">
+      <label>Serial Port</label>
+      <select id="sel-port"></select>
+      <button class="btn-action" onclick="applyPort()">Apply</button>
+    </div>
+    <div class="action-field">
+      <label>Wi-Fi</label>
+      <button class="btn-action" onclick="post('/wifi/enable')">Enable</button>
+      <button class="btn-action danger" onclick="post('/wifi/disable')">Disable</button>
+    </div>
+  </div>
+
+  <div class="section-title">Faults</div>
+  <div class="action-grid">
+    <div class="action-row">
+      <span class="a-label">Diagnostic Trouble Codes</span>
+      <div class="a-btns"><button class="btn-action danger" onclick="cmd('clearfaults')">Clear Faults</button></div>
+    </div>
+  </div>
+
+  <div class="section-title">Actuator Tests</div>
+  <div class="action-grid" id="actuator-grid"></div>
+
+  <div class="section-title">Adjustments</div>
+  <div class="action-grid" id="adjust-grid"></div>
+
+</div><!-- /tab-actions -->
+
+<div class="toast" id="action-toast"></div>
+
 <!-- ═══════════════ DEBUG TAB ═══════════════ -->
 <div id="tab-debug" class="tab">
   <div class="debug-grid">
@@ -544,7 +624,9 @@ function render(d) {
     dot.className = 'status-dot connected';
     stxt.textContent = 'CONNECTED';
   } else {
-    dot.className = 'status-dot error';
+    // Neutral (grey) for a plain disconnect; red is reserved for a real error,
+    // which surfaces through the error banner below.
+    dot.className = 'status-dot' + (d.error ? ' error' : '');
     stxt.textContent = 'DISCONNECTED';
   }
 
@@ -683,25 +765,162 @@ function render(d) {
     }).join('');
   }
 
-  // Log lines
+  // Actions tab — keep the config selects in sync with discovered ports and the
+  // active ECU/port, without clobbering a choice the user is in the middle of.
+  syncPortSelect(ports, d.selectedSerialPort);
+  syncEcuSelect(d.ecuType);
+
+  // Log lines. The server keeps only the last 100 lines and slides that window,
+  // so a naive "append everything past the current child count" freezes once the
+  // window is full. Rebuild the panel whenever the log content actually changes.
   const logContainer = document.getElementById('log-container');
   const lines = d.logLines || [];
-  if (lines.length > 0) {
-    // Only append new lines
-    const current = logContainer.children.length;
-    for (let i = current; i < lines.length; i++) {
+  const logSig = lines.join('\n');
+  if (logSig !== lastLogSig) {
+    lastLogSig = logSig;
+    const nearBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 40;
+    logContainer.replaceChildren(...lines.map(l => {
       const div = document.createElement('div');
       div.className = 'log-line';
-      div.textContent = lines[i];
-      logContainer.appendChild(div);
-    }
-    // Auto-scroll
-    logContainer.scrollTop = logContainer.scrollHeight;
+      div.textContent = l;
+      return div;
+    }));
+    if (nearBottom) logContainer.scrollTop = logContainer.scrollHeight;
   }
 
   // Raw JSON
   document.getElementById('raw-json').textContent = JSON.stringify(d, null, 2);
 }
+
+// ── Actions ────────────────────────────────────────────────────
+let lastLogSig = '';
+
+const ECU_TYPES = ['1.x', '1.9', '2J', 'rc5', '3', 'fake'];
+
+// [label, startCommand, stopCommand|null]
+const ACTUATORS = [
+  ['RPM Gauge Sweep', 'startTestRpmGauge', null],
+  ['Lambda Heater',   'startTestLambdaHeater', 'stopTestLambdaHeater'],
+  ['A/C Clutch',      'startTestACClutch', 'stopTestACClutch'],
+  ['Fuel Pump',       'startTestFuelPump', 'stopTestFuelPump'],
+  ['Fan 1',           'startTestFan1', 'stopTestFan1'],
+  ['Purge Valve',     'startTestPurgeValve', 'stopTestPurgeValve'],
+];
+
+// [label, increaseCommand, decreaseCommand]
+const ADJUSTMENTS = [
+  ['Idle Decay',             'increaseIdleDecay', 'decreaseIdleDecay'],
+  ['Idle Speed',             'increaseIdleSpeed', 'decreaseIdleSpeed'],
+  ['Ignition Advance Offset','increaseIgnitionAdvanceOffset', 'decreaseIgnitionAdvanceOffset'],
+  ['Fuel Trim 1',            'increaseFuelTrim1', 'decreaseFuelTrim1'],
+  ['Fuel Trim 2',            'increaseFuelTrim2', 'decreaseFuelTrim2'],
+];
+
+function buildActionGrids() {
+  const actu = document.getElementById('actuator-grid');
+  actu.replaceChildren(...ACTUATORS.map(([label, start, stop]) => {
+    const row = document.createElement('div');
+    row.className = 'action-row';
+    const l = document.createElement('span');
+    l.className = 'a-label'; l.textContent = label;
+    const btns = document.createElement('div');
+    btns.className = 'a-btns';
+    const startBtn = document.createElement('button');
+    startBtn.className = 'btn-action'; startBtn.textContent = 'Start';
+    startBtn.onclick = () => cmd(start);
+    btns.appendChild(startBtn);
+    if (stop) {
+      const stopBtn = document.createElement('button');
+      stopBtn.className = 'btn-action danger'; stopBtn.textContent = 'Stop';
+      stopBtn.onclick = () => cmd(stop);
+      btns.appendChild(stopBtn);
+    }
+    row.append(l, btns);
+    return row;
+  }));
+
+  const adj = document.getElementById('adjust-grid');
+  adj.replaceChildren(...ADJUSTMENTS.map(([label, inc, dec]) => {
+    const row = document.createElement('div');
+    row.className = 'action-row';
+    const l = document.createElement('span');
+    l.className = 'a-label'; l.textContent = label;
+    const btns = document.createElement('div');
+    btns.className = 'a-btns';
+    const minus = document.createElement('button');
+    minus.className = 'btn-action pm'; minus.textContent = '−';
+    minus.onclick = () => cmd(dec);
+    const plus = document.createElement('button');
+    plus.className = 'btn-action pm'; plus.textContent = '+';
+    plus.onclick = () => cmd(inc);
+    btns.append(minus, plus);
+    row.append(l, btns);
+    return row;
+  }));
+
+  const ecuSel = document.getElementById('sel-ecu');
+  ecuSel.replaceChildren(...ECU_TYPES.map(t => {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = t;
+    return o;
+  }));
+}
+
+// syncPortSelect rebuilds the port dropdown only when the discovered set changes,
+// so it does not reset a selection the user is browsing. Auto-selects the port
+// the agent reports as active.
+let lastPortsSig = '';
+function syncPortSelect(ports, selected) {
+  const sig = ports.join('|');
+  const sel = document.getElementById('sel-port');
+  if (sig !== lastPortsSig) {
+    lastPortsSig = sig;
+    if (ports.length === 0) {
+      sel.replaceChildren(new Option('— none —', ''));
+    } else {
+      sel.replaceChildren(...ports.map(p => new Option(p, p)));
+    }
+  }
+  if (selected && sel.value !== selected && ports.includes(selected)) {
+    sel.value = selected;
+  }
+}
+
+let ecuUserTouched = false;
+function syncEcuSelect(active) {
+  const sel = document.getElementById('sel-ecu');
+  sel.onchange = () => { ecuUserTouched = true; };
+  if (active && !ecuUserTouched) sel.value = active;
+}
+
+async function post(url, okMsg) {
+  try {
+    const r = await fetch(url, { method: 'POST' });
+    const txt = (await r.text()).trim();
+    toast(r.ok ? (okMsg || txt || 'OK') : ('Error: ' + (txt || r.status)), r.ok);
+  } catch (e) {
+    toast('Request failed: ' + e, false);
+  }
+}
+
+function cmd(name) { post('/command/' + encodeURIComponent(name)); }
+function applyEcu() { post('/ecu/' + encodeURIComponent(document.getElementById('sel-ecu').value)); }
+function applyPort() {
+  const v = document.getElementById('sel-port').value;
+  if (!v) { toast('No port selected', false); return; }
+  post('/serialPort?name=' + encodeURIComponent(v));
+}
+
+let toastTimer = null;
+function toast(msg, ok) {
+  const t = document.getElementById('action-toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + (ok ? 'ok' : 'err');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = 'toast'; }, 3000);
+}
+
+buildActionGrids();
 
 // ── WebSocket ──────────────────────────────────────────────────
 let ws = null;
