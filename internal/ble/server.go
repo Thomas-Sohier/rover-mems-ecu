@@ -144,6 +144,8 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
 					if err := huStore.HandleCommand(value); err != nil {
 						log.Printf("ble: HandleCommand: %v", err)
+					} else {
+						log.Printf("ble: head-unit command relayed: %s", value)
 					}
 				},
 			},
@@ -199,17 +201,21 @@ func runCatalogNotifier(ctx context.Context, huStore *headunit.Store, catalogCha
 			if !ok {
 				return
 			}
-			for _, frame := range headunit.BuildFrames(catalog, headunit.MaxFragmentPayload) {
+			frames := headunit.BuildFrames(catalog, headunit.MaxFragmentPayload)
+			sent := 0
+			for _, frame := range frames {
 				if _, err := catalogChar.Write(frame); err != nil {
 					log.Printf("ble: catalog notify: %v", err)
 					break
 				}
+				sent++
 				select {
 				case <-ctx.Done():
 					return
 				case <-time.After(interFragmentDelay):
 				}
 			}
+			log.Printf("ble: catalog notified: %d bytes in %d/%d frames", len(catalog), sent, len(frames))
 		}
 	}
 }
