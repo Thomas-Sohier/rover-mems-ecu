@@ -15,6 +15,9 @@ func TestParseCommand_Valid(t *testing.T) {
 		`{"type":"set_setting_value","setting_id":"bright","value":60}`,
 		`{"type":"set_setting_value","setting_id":"theme","value":"dark"}`,
 		`{"type":"request_catalog"}`,
+		`{"type":"nav_key","key":"next"}`,
+		`{"type":"nav_key","key":"ok"}`,
+		`{"type":"nav_key","key":"back"}`,
 	}
 	for _, c := range cases {
 		if _, err := ParseCommand([]byte(c)); err != nil {
@@ -31,6 +34,8 @@ func TestParseCommand_Invalid(t *testing.T) {
 		`{"type":"set_view_visibility","view_id":"map"}`, // missing visible
 		`{"type":"set_setting_value","setting_id":"x"}`,  // missing value
 		`{"type":"set_setting_value","value":1}`,         // missing setting_id
+		`{"type":"nav_key"}`,                             // missing key
+		`{"type":"nav_key","key":"select"}`,              // unknown key
 	}
 	for _, c := range cases {
 		if _, err := ParseCommand([]byte(c)); err == nil {

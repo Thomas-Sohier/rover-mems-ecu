@@ -20,6 +20,7 @@
 //	  {"type":"set_view_visibility","view_id":…,"visible":true|false}
 //	  {"type":"set_setting_value","setting_id":…,"value":bool|number|string}
 //	  {"type":"request_catalog"}
+//	  {"type":"nav_key","key":"next"|"previous"|"up"|"down"|"left"|"right"|"ok"|"back"}
 //	Fire-and-forget; no application-level ack. Authoritative state always comes
 //	back on the catalog characteristic.
 //
@@ -63,7 +64,16 @@ const (
 	CmdSetViewVisibility = "set_view_visibility"
 	CmdSetSettingValue   = "set_setting_value"
 	CmdRequestCatalog    = "request_catalog"
+	CmdNavKey            = "nav_key"
 )
+
+// NavKeys are the accepted values for the nav_key command's key field: the
+// physical buttons of the phone-side remote pad.
+var NavKeys = map[string]bool{
+	"next": true, "previous": true,
+	"up": true, "down": true, "left": true, "right": true,
+	"ok": true, "back": true,
+}
 
 // Command is a decoded control command from the phone. Value is left as raw
 // JSON because its type depends on the target setting (bool, number, or string)
@@ -74,6 +84,7 @@ type Command struct {
 	Visible   *bool           `json:"visible,omitempty"`
 	SettingID string          `json:"setting_id,omitempty"`
 	Value     json.RawMessage `json:"value,omitempty"`
+	Key       string          `json:"key,omitempty"`
 }
 
 // ParseCommand decodes and validates a command-characteristic write payload.
@@ -103,6 +114,10 @@ func ParseCommand(data []byte) (Command, error) {
 		}
 	case CmdRequestCatalog:
 		// no fields
+	case CmdNavKey:
+		if !NavKeys[c.Key] {
+			return Command{}, fmt.Errorf("headunit: %s unknown key %q", c.Type, c.Key)
+		}
 	default:
 		return Command{}, fmt.Errorf("headunit: unknown command type %q", c.Type)
 	}
