@@ -16,6 +16,7 @@ import (
 	"rover-mems-agent/internal/bluetooth"
 	"rover-mems-agent/internal/ecu"
 	"rover-mems-agent/internal/headunit"
+	"rover-mems-agent/internal/logging"
 	"rover-mems-agent/internal/navigation"
 	"rover-mems-agent/internal/notification"
 	"rover-mems-agent/internal/nowplaying"
@@ -38,6 +39,8 @@ var getPorts = serial.GetPortsList
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	logging.Setup()
 
 	state := ecu.NewState()
 	npStore := nowplaying.NewStore()
