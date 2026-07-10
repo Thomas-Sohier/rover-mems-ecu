@@ -23,6 +23,15 @@ import (
 // cannot be enabled or the service cannot be registered.
 func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Store, notifStore *notification.Store, huStore *headunit.Store, deviceName string) error {
 	adapter := bluetooth.DefaultAdapter
+	// Une perte de signal apparaît comme une déconnexion après le timeout de
+	// supervision BLE.
+	adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
+		if connected {
+			log.Printf("ble: device connected: %s", device.Address)
+		} else {
+			log.Printf("ble: device disconnected: %s", device.Address)
+		}
+	})
 	if err := adapter.Enable(); err != nil {
 		return err
 	}
@@ -79,6 +88,7 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				UUID:  metaUUID,
 				Flags: bluetooth.CharacteristicWritePermission,
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					log.Printf("ble: metadata write (%d bytes): %s", len(value), value)
 					if err := store.HandleMetadata(value); err != nil {
 						log.Printf("ble: HandleMetadata: %v", err)
 					}
@@ -88,6 +98,7 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				UUID:  artCtrlUUID,
 				Flags: bluetooth.CharacteristicWritePermission,
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					log.Printf("ble: art control write (%d bytes): %s", len(value), value)
 					if err := store.HandleArtControl(value); err != nil {
 						log.Printf("ble: HandleArtControl: %v", err)
 					}
@@ -97,6 +108,7 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				UUID:  artDataUUID,
 				Flags: bluetooth.CharacteristicWriteWithoutResponsePermission,
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					log.Printf("ble: art chunk write (%d bytes)", len(value))
 					if err := store.HandleArtChunk(value); err != nil {
 						log.Printf("ble: HandleArtChunk: %v", err)
 					}
@@ -106,6 +118,7 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				UUID:  navUUID,
 				Flags: bluetooth.CharacteristicWritePermission,
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					log.Printf("ble: navigation write (%d bytes): %s", len(value), value)
 					if err := navStore.HandleNavigation(value); err != nil {
 						log.Printf("ble: HandleNavigation: %v", err)
 					}
@@ -115,6 +128,7 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				UUID:  navIconCtrlUUID,
 				Flags: bluetooth.CharacteristicWritePermission,
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					log.Printf("ble: icon control write (%d bytes): %s", len(value), value)
 					if err := navStore.HandleIconControl(value); err != nil {
 						log.Printf("ble: HandleIconControl: %v", err)
 					}
@@ -124,6 +138,7 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				UUID:  navIconDataUUID,
 				Flags: bluetooth.CharacteristicWriteWithoutResponsePermission,
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					log.Printf("ble: icon chunk write (%d bytes)", len(value))
 					if err := navStore.HandleIconChunk(value); err != nil {
 						log.Printf("ble: HandleIconChunk: %v", err)
 					}
@@ -133,6 +148,7 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				UUID:  alertUUID,
 				Flags: bluetooth.CharacteristicWritePermission,
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					log.Printf("ble: alert write (%d bytes): %s", len(value), value)
 					if err := notifStore.HandleAlert(value); err != nil {
 						log.Printf("ble: HandleAlert: %v", err)
 					}
@@ -142,6 +158,7 @@ func Run(ctx context.Context, store *nowplaying.Store, navStore *navigation.Stor
 				UUID:  huCmdUUID,
 				Flags: bluetooth.CharacteristicWritePermission,
 				WriteEvent: func(_ bluetooth.Connection, _ int, value []byte) {
+					log.Printf("ble: head-unit command write (%d bytes): %s", len(value), value)
 					if err := huStore.HandleCommand(value); err != nil {
 						log.Printf("ble: HandleCommand: %v", err)
 					} else {

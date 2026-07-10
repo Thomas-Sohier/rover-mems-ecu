@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -59,6 +60,11 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
+	// Log d'entrée de chaque requête (debug de la chaîne companion → head unit).
+	router.Use(func(c *gin.Context) {
+		log.Printf("http: %s %s from %s", c.Request.Method, c.Request.URL.RequestURI(), c.ClientIP())
+		c.Next()
+	})
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowOrigins = []string{"http://localhost", "http://127.0.0.1"}
 	router.Use(cors.New(corsConfig))
@@ -365,6 +371,7 @@ func (s *Server) wsNowPlayingWrite(conn *websocket.Conn, snap nowplaying.Snapsho
 	if err != nil {
 		return err
 	}
+	log.Printf("ws/nowplaying: sent: %s", jsonData)
 	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 		return err
 	}
@@ -433,6 +440,7 @@ func (s *Server) wsNavigationHandler(w http.ResponseWriter, r *http.Request, ctx
 			if !ok {
 				return
 			}
+			log.Printf("ws/navigation: sent: %+v", snap)
 			if err := s.wsJSONWrite(conn, snap); err != nil {
 				return
 			}
@@ -492,6 +500,7 @@ func (s *Server) wsNotificationsHandler(w http.ResponseWriter, r *http.Request, 
 			if !ok {
 				return
 			}
+			log.Printf("ws/notifications: sent: %+v", alert)
 			if err := s.wsJSONWrite(conn, alert); err != nil {
 				return
 			}
@@ -545,6 +554,7 @@ func (s *Server) wsHeadUnitHandler(w http.ResponseWriter, r *http.Request, ctx c
 			if err != nil {
 				return
 			}
+			log.Printf("ws/headunit: catalog received (%d bytes)", len(message))
 			if err := s.headunit.SetCatalog(message); err != nil {
 				s.state.LogDebugf("ws/headunit: catalog rejected: %v", err)
 			}
@@ -568,6 +578,7 @@ func (s *Server) wsHeadUnitHandler(w http.ResponseWriter, r *http.Request, ctx c
 			if !ok {
 				return
 			}
+			log.Printf("ws/headunit: command to frontend: %s", cmd)
 			if err := s.wsBytesWrite(conn, cmd); err != nil {
 				return
 			}
