@@ -7,6 +7,23 @@ so it works standalone without internet access.
 Supported ECU types (`-ecutype`): `1.x` (MEMS 1.2 / 1.3 / 1.6), `1.9`, `2J`, `3`,
 `rc5` (airbag), and `fake` (for testing without hardware).
 
+> **Personal project — no guarantee it works on your hardware.**
+> Development and testing happen on a single setup: a Raspberry Pi 3B+ with a
+> VAG 409.1 KKL cable (FTDI). Everything else is inferred from public protocol
+> documentation and unverified in practice.
+>
+> K-line adapters differ in ways the software cannot detect: whether they echo
+> what you transmit, whether their driver supports break (needed for the 5-baud
+> and fast-init wake-ups), and how much they buffer — FTDI's 16 ms default
+> latency timer alone eats most of the 25–50 ms ISO 9141 handshake window. A
+> different cable, a different Pi under load, or a different ECU revision can
+> each be enough to stop it working.
+>
+> MEMS 1.9 is the current focus. The other variants have unit tests, but those
+> run against a scripted fake port with no notion of elapsed time — they say the
+> decoding is self-consistent, not that the protocol works on a real car. Use
+> `-capture` (see below) when something matters on the wire.
+
 ## Credit / original work
 
 This is a fork of James Portman's **rover-mems-agent**:

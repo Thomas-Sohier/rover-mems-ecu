@@ -2,6 +2,47 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Scope and limitations
+
+This is a personal project, developed and tested against **one** setup: a
+Raspberry Pi 3B+ driving a VAG 409.1 KKL OBD cable (assumed FTDI FT232RL — the
+listing also named CH340T and the exact chip is unconfirmed). Everything outside
+that combination is inferred from public protocol documentation and has not been
+verified on hardware. It may well not work on yours.
+
+Concretely, these are the things that differ between setups and that the code
+cannot detect on its own:
+
+- **TX echo.** The K-line is single-wire half-duplex and most interfaces echo
+  what we transmit back onto RX. `MEMS1x.ReadData` hardcodes that assumption,
+  which is right for an L9637D-based cable like the KKL. An adapter that
+  suppresses the echo would have every ECU reply silently eaten, because in
+  MEMS 1.x the acknowledgement *is* the command byte and the two are
+  indistinguishable by value.
+- **Break support.** The 5-baud and fast-init wake-ups need `TIOCSBRK`. Adapters
+  whose kernel driver has no `break_ctl` cannot wake an ECU at all.
+- **Buffering and latency.** FTDI's 16 ms default latency timer eats most of the
+  25–50 ms ISO 9141 W4 window; CH340 buffers differently. Timing margins that
+  hold on one adapter can fail on another.
+- **Framing-error byte values.** Drivers report a framing error as `0x00`,
+  `0xF8`, `0xFE` or other junk, with no portable rule. The wake-up parsing
+  tolerates all of it on purpose.
+- **Load.** The bit-banged 5-baud waveform uses `time.Sleep` for its 200 ms bit
+  periods. A loaded or thermally throttled Pi can stretch them.
+
+Where the code is deliberately permissive — searching for a sync byte rather
+than expecting it first, accepting several shapes of acknowledgement — that
+tolerance is there to absorb this variance. Do not tighten it to match one
+adapter's observed behaviour.
+
+**Per-variant status.** MEMS 1.9 is the current focus and its hardware bring-up
+is still in progress. MEMS 2J, 3 and RC5 have unit tests covering their parsers
+and state machines, but unit tests exercise a scripted fake port with no notion
+of elapsed time: a green run says the decoding is self-consistent, never that
+the protocol works on a real car. The `fake` ECU type bypasses the wire protocol
+entirely and only exercises the web layer. Use `-capture` (below) for anything
+that matters on the wire.
+
 ## Build & Run
 
 ```bash
