@@ -24,6 +24,25 @@ var openPort = serial.Open
 // neutralise the real-time delays of the 5-baud wake-up and handshake.
 var sleep = time.Sleep
 
+const (
+	// w4Delay is the ISO 9141-2 pause between receiving KW2 and replying with
+	// ~KW2. The standard allows 25–50 ms; we sit in the middle rather than on
+	// the 25 ms floor because on an FTDI adapter we do not learn about KW2 the
+	// instant it lands. The chip holds short packets for its latency timer
+	// (16 ms out of the box) before forwarding them upstream, so part of the
+	// window is already spent by the time we are woken. If the handshake proves
+	// marginal on real hardware, lower the adapter's latency timer first:
+	//
+	//	echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+	w4Delay = 30 * time.Millisecond
+
+	// p3Delay is the ISO 9141-2 gap between the end of initialisation and the
+	// first request of the session (P3, minimum 55 ms). Without it the shared
+	// mems1x loop fires 0xCA at an ECU that has not finished settling, and the
+	// byte is simply dropped.
+	p3Delay = 60 * time.Millisecond
+)
+
 // MEMS19 handles MEMS 1.9 ECUs which require ISO 9141 5-baud wake-up.
 type MEMS19 struct {
 	*mems1x.MEMS1x
@@ -105,6 +124,9 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	}
 	m.flushInput()
 
+	m.state.LogDebugf("1.9 waiting P3 (%v) before the first request", p3Delay)
+	sleep(p3Delay)
+
 	m.state.LogDebug("1.9 handing off port to shared mems1x data loop (0xCA init)")
 	m.MEMS1x.SetSerialPort(sp)
 	return nil
@@ -139,9 +161,11 @@ func (m *MEMS19) handleWakeUpHandshake() error {
 		m.state.LogDebug("1.9 ECU: no keyword frame within timeout; sending fallback challenge 0x7C (assumes KW2=0x83)")
 	}
 
-	sleep(25 * time.Millisecond)
-
-	m.state.LogDebugf("Sending Challenge Response: 0x%02X", challengeResponse)
+	// Log before sleeping, never between the sleep and the Write: W4 is a
+	// 25–50 ms window and a debug line going to a slow console (a serial or SSH
+	// terminal on the Pi) is easily worth several milliseconds of it.
+	m.state.LogDebugf("Sending Challenge Response: 0x%02X after W4 (%v)", challengeResponse, w4Delay)
+	sleep(w4Delay)
 	if _, err := m.sp.Write([]byte{challengeResponse}); err != nil {
 		return err
 	}
