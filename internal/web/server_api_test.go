@@ -60,29 +60,48 @@ func TestAPIState(t *testing.T) {
 	}
 }
 
-func TestAPIStateConsumesAlertError(t *testing.T) {
+// TestAPIStateReportsAlertErrorToEveryReader replaces an earlier test that
+// asserted /api cleared Alert/Error as it read them.
+//
+// That one-shot behaviour was the bug: /api and /ws both consumed the same
+// fields, so whichever polled first swallowed the notice and the other never
+// saw it. Notices now persist and carry a sequence number, and it is the client
+// that shows each one once, per bump.
+func TestAPIStateReportsAlertErrorToEveryReader(t *testing.T) {
 	state := ecu.NewState()
-	state.Alert = "test-alert"
-	state.Error = "test-error"
+	state.SetAlert("test-alert")
+	state.SetError("test-error")
 	srv := newAPITestServer(state)
 
-	w := do(t, srv, http.MethodGet, "/api")
-	var got map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got["alert"] != "test-alert" || got["error"] != "test-error" {
-		t.Fatalf("first read: alert=%v error=%v", got["alert"], got["error"])
+	read := func() map[string]any {
+		t.Helper()
+		w := do(t, srv, http.MethodGet, "/api")
+		var got map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return got
 	}
 
-	// Alert/Error are one-shot: a second read must see them cleared.
-	w2 := do(t, srv, http.MethodGet, "/api")
-	var got2 map[string]any
-	if err := json.Unmarshal(w2.Body.Bytes(), &got2); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	first := read()
+	if first["alert"] != "test-alert" || first["error"] != "test-error" {
+		t.Fatalf("first read: alert=%v error=%v", first["alert"], first["error"])
 	}
-	if got2["alert"] != "" || got2["error"] != "" {
-		t.Fatalf("second read not cleared: alert=%v error=%v", got2["alert"], got2["error"])
+
+	// A second reader (in production, the WebSocket stream) must see them too.
+	second := read()
+	if second["alert"] != "test-alert" || second["error"] != "test-error" {
+		t.Fatalf("second reader lost the notice: alert=%v error=%v", second["alert"], second["error"])
+	}
+	if second["alertSeq"] != first["alertSeq"] || second["errorSeq"] != first["errorSeq"] {
+		t.Errorf("sequence changed without a new notice: %v/%v then %v/%v",
+			first["alertSeq"], first["errorSeq"], second["alertSeq"], second["errorSeq"])
+	}
+
+	// Raising the same text again is still distinguishable as a new notice.
+	state.SetAlert("test-alert")
+	if third := read(); third["alertSeq"] == first["alertSeq"] {
+		t.Errorf("alertSeq did not advance on a repeated alert: %v", third["alertSeq"])
 	}
 }
 
