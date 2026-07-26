@@ -50,6 +50,24 @@ var (
 		"clearfaults": clearFaultsCommand,
 	}
 
+	// nextAfterResponse maps a complete ECU reply to the request that follows
+	// it, stating the whole sequence in one place: init -> diag -> seed/key ->
+	// ping -> faults -> data PIDs -> back to ping. The seed reply is handled
+	// separately in sendNextCommand because its answer carries the derived key.
+	nextAfterResponse = map[string][]byte{
+		string(initAccepted):          startDiagnostic,
+		string(startDiagResponse):     requestSeed,
+		string(keyAcceptResponse):     pingCommand,
+		string(pongResponse):          requestFaultsCommand,
+		string(faultsClearedResponse): requestFaultsCommand,
+		string(responseFaults):        requestData00,
+		string(responseData00):        requestData06,
+		string(responseData06):        requestData0A,
+		string(responseData0A):        requestData0B,
+		string(responseData0B):        requestData21,
+		string(responseData21):        pingCommand,
+	}
+
 	faultTypes = map[int]string{
 		0x20: "historical",
 		0x74: "present, test not complete",
@@ -188,156 +206,24 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 
 		actualData := buffer[4 : 4+dataLength]
 
+		// A frame carrying our own address header is the echo of a request we
+		// sent; the ECU's replies do not repeat it.
 		if slicesEqual(buffer[0:3], requestHeader) {
-			if slicesEqual(actualData, initCommand) ||
-				slicesEqual(actualData, startDiagnostic) ||
-				slicesEqual(actualData, requestSeed) ||
-				(len(actualData) >= 2 && slicesEqual(actualData[0:2], sendKey)) ||
-				slicesEqual(actualData, pingCommand) {
-				buffer = buffer[totalLength:]
-				continue
-			}
 			buffer = buffer[totalLength:]
 			continue
 		}
 
-		m.state.Lock()
-
-		if len(actualData) >= 2 && slicesEqual(actualData[0:2], initAccepted) {
-			m.state.LogDebug("< ECU woke up")
-			buffer = nil
-			m.state.Connected = true
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(initAccepted)
-			continue
-		}
-		if slicesEqual(actualData, startDiagResponse) {
-			m.state.LogDebug("< Diag mode accepted")
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(startDiagResponse)
-			continue
-		}
-		if len(actualData) >= 2 && slicesEqual(actualData[0:2], seedResponse) {
-			m.seed = int(actualData[2]) << 8
-			m.seed += int(actualData[3])
-			m.state.LogDebugf("< seed %d", m.seed)
-			if m.seed == 0 {
-				m.key = 0
-				buffer = nil
-				m.state.Unlock()
-				time.Sleep(50 * time.Millisecond)
-				m.sendNextCommand(nil)
-				m.state.LogDebug("Auth not required, collecting data...")
-				continue
-			} else {
-				m.key = ecu.GenerateKey(m.seed)
-				buffer = nil
-				m.state.Unlock()
-				time.Sleep(50 * time.Millisecond)
-				m.sendNextCommand(seedResponse)
-				continue
-			}
-		}
-		if slicesEqual(actualData, keyAcceptResponse) {
-			m.state.LogDebug("< Key accepted, collecting data...")
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(keyAcceptResponse)
-			continue
-		}
-		if slicesEqual(actualData, pongResponse) {
-			m.state.LogDebug(".")
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(pongResponse)
-			continue
-		}
-		if slicesEqual(actualData, faultsClearedResponse) {
-			m.state.LogDebug("< FAULTS CLEARED")
-			m.state.Alert = "ECU reports faults cleared"
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(faultsClearedResponse)
+		reply, handled := m.handleFrame(actualData)
+		if !handled {
+			m.state.LogDebugf("unknown command in buffer (burning it): got %d bytes \n%s", len(buffer), hex.Dump(buffer[0:totalLength]))
+			m.state.LogDebugf("actualData %d bytes \n%s", len(actualData), hex.Dump(actualData))
+			buffer = buffer[totalLength:]
 			continue
 		}
 
-		if len(actualData) >= len(responseFaults) && slicesEqual(actualData[0:len(responseFaults)], responseFaults) {
-			m.parseFaults(actualData)
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(responseFaults)
-			continue
-		}
-
-		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData00) {
-			coolantTemp := int(actualData[2])<<8 + int(actualData[3]) - 2730
-			m.state.Data["coolant_temp"] = float32(coolantTemp) / 10
-			oilTemp := int(actualData[6])<<8 + int(actualData[7]) - 2730
-			m.state.Data["oil_temp"] = float32(oilTemp) / 10
-			intakeAirTemp := int(actualData[10])<<8 + int(actualData[11]) - 2730
-			m.state.Data["intake_air_temp"] = float32(intakeAirTemp) / 10
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(responseData00)
-			continue
-		}
-		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData06) {
-			mapKpa := int(actualData[2])<<8 + int(actualData[3])
-			m.state.Data["map_sensor_kpa"] = float32(mapKpa) / 100
-			throttleMv := int(actualData[8])<<8 + int(actualData[9])
-			m.state.Data["throttle_mv"] = float32(throttleMv)
-			rpm := int(actualData[10])<<8 + int(actualData[11])
-			m.state.Data["rpm"] = float32(rpm)
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(responseData06)
-			continue
-		}
-		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData0A) {
-			fuelFeedback := int(actualData[2])<<8 + int(actualData[3])
-			m.state.Data["fuel_feedback_percent"] = float32(fuelFeedback) / 100
-			preLambdaMv := int(actualData[4])<<8 + int(actualData[5])
-			m.state.Data["lambda_mv"] = float32(preLambdaMv)
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(responseData0A)
-			continue
-		}
-		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData0B) {
-			coil1 := int(actualData[2])<<8 + int(actualData[3])
-			m.state.Data["coil_1_time_uS"] = float32(coil1)
-			coil2 := int(actualData[4])<<8 + int(actualData[5])
-			m.state.Data["coil_2_time_uS"] = float32(coil2)
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(responseData0B)
-			continue
-		}
-		if len(actualData) >= 2 && slicesEqual(actualData[0:2], responseData21) {
-			rpmdev := int(actualData[2])<<8 + int(actualData[3])
-			m.state.Data["rpm_deviation"] = float32(rpmdev)
-			buffer = nil
-			m.state.Unlock()
-			time.Sleep(50 * time.Millisecond)
-			m.sendNextCommand(responseData21)
-			continue
-		}
-
-		m.state.LogDebugf("unknown command in buffer (burning it): got %d bytes \n%s", len(buffer), hex.Dump(buffer[0:totalLength]))
-		m.state.LogDebugf("actualData %d bytes \n%s", len(actualData), hex.Dump(actualData))
-		buffer = buffer[totalLength:]
-		m.state.Unlock()
+		buffer = nil
+		time.Sleep(50 * time.Millisecond)
+		m.sendNextCommand(reply)
 	}
 
 	if readLoops >= readLoopsLimit {
@@ -348,56 +234,162 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 	return nil
 }
 
+// handleFrame interprets one decoded MEMS 3 payload, updating the shared state.
+//
+// It returns the canonical reply constant to feed to sendNextCommand, and
+// whether the frame was recognised at all; an unrecognised frame is left for the
+// caller to log and discard. The returned constant is deliberately not
+// actualData: the state machine keys off the fixed response codes, not off the
+// variable-length payload that carried them.
+//
+// The State lock is taken only around the writes, never across the caller's
+// inter-frame delay.
+func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
+	switch {
+	case len(actualData) >= 2 && slicesEqual(actualData[0:2], initAccepted):
+		m.state.Lock()
+		m.state.Connected = true
+		m.state.Unlock()
+		m.state.LogDebug("< ECU woke up")
+		return initAccepted, true
+
+	case slicesEqual(actualData, startDiagResponse):
+		m.state.LogDebug("< Diag mode accepted")
+		return startDiagResponse, true
+
+	case len(actualData) >= 4 && slicesEqual(actualData[0:2], seedResponse):
+		m.seed = int(actualData[2])<<8 + int(actualData[3])
+		m.state.LogDebugf("< seed %d", m.seed)
+		if m.seed == 0 {
+			// Already unlocked: no key to send, so fall through to the ping that
+			// sendNextCommand issues for an unrecognised reply.
+			m.key = 0
+			m.state.LogDebug("Auth not required, collecting data...")
+			return nil, true
+		}
+		m.key = ecu.GenerateKey(m.seed)
+		return seedResponse, true
+
+	case slicesEqual(actualData, keyAcceptResponse):
+		m.state.LogDebug("< Key accepted, collecting data...")
+		return keyAcceptResponse, true
+
+	case slicesEqual(actualData, pongResponse):
+		m.state.LogDebug(".")
+		return pongResponse, true
+
+	case slicesEqual(actualData, faultsClearedResponse):
+		m.state.Lock()
+		m.state.Alert = "ECU reports faults cleared"
+		m.state.Unlock()
+		m.state.LogDebug("< FAULTS CLEARED")
+		return faultsClearedResponse, true
+
+	case len(actualData) >= len(responseFaults) && slicesEqual(actualData[0:len(responseFaults)], responseFaults):
+		m.parseFaults(actualData)
+		return responseFaults, true
+	}
+
+	if len(actualData) < 2 {
+		return nil, false
+	}
+
+	// Data PIDs: each is a fixed set of 16-bit big-endian fields.
+	m.state.Lock()
+	defer m.state.Unlock()
+
+	switch {
+	case slicesEqual(actualData[0:2], responseData00):
+		if len(actualData) < 12 {
+			return nil, false
+		}
+		m.state.Data["coolant_temp"] = float32(int(actualData[2])<<8+int(actualData[3])-2730) / 10
+		m.state.Data["oil_temp"] = float32(int(actualData[6])<<8+int(actualData[7])-2730) / 10
+		m.state.Data["intake_air_temp"] = float32(int(actualData[10])<<8+int(actualData[11])-2730) / 10
+		return responseData00, true
+
+	case slicesEqual(actualData[0:2], responseData06):
+		if len(actualData) < 12 {
+			return nil, false
+		}
+		m.state.Data["map_sensor_kpa"] = float32(int(actualData[2])<<8+int(actualData[3])) / 100
+		m.state.Data["throttle_mv"] = float32(int(actualData[8])<<8 + int(actualData[9]))
+		m.state.Data["rpm"] = float32(int(actualData[10])<<8 + int(actualData[11]))
+		return responseData06, true
+
+	case slicesEqual(actualData[0:2], responseData0A):
+		if len(actualData) < 6 {
+			return nil, false
+		}
+		m.state.Data["fuel_feedback_percent"] = float32(int(actualData[2])<<8+int(actualData[3])) / 100
+		m.state.Data["lambda_mv"] = float32(int(actualData[4])<<8 + int(actualData[5]))
+		return responseData0A, true
+
+	case slicesEqual(actualData[0:2], responseData0B):
+		if len(actualData) < 6 {
+			return nil, false
+		}
+		m.state.Data["coil_1_time_uS"] = float32(int(actualData[2])<<8 + int(actualData[3]))
+		m.state.Data["coil_2_time_uS"] = float32(int(actualData[4])<<8 + int(actualData[5]))
+		return responseData0B, true
+
+	case slicesEqual(actualData[0:2], responseData21):
+		if len(actualData) < 4 {
+			return nil, false
+		}
+		m.state.Data["rpm_deviation"] = float32(int(actualData[2])<<8 + int(actualData[3]))
+		return responseData21, true
+	}
+
+	return nil, false
+}
+
+// takeUserCommand consumes any pending user command, returning the bytes to
+// send. ok is false when nothing is pending or the name is unknown; either way
+// the pending command is cleared so an unrecognised name cannot be retried on
+// every iteration for the life of the session.
+func (m *MEMS3) takeUserCommand() (command []byte, ok bool) {
+	m.state.Lock()
+	name := m.state.UserCommand
+	m.state.UserCommand = ""
+	m.state.Unlock()
+
+	if name == "" {
+		return nil, false
+	}
+	command, ok = userCommands[name]
+	if !ok {
+		m.state.LogDebug("Asked to perform a user command but don't understand it")
+		return nil, false
+	}
+	return command, true
+}
+
 // sendNextCommand picks the next MEMS 3 request from the previous reply, walking
 // the init/auth/poll sequence documented on ReadData (init -> diag -> seed/key ->
 // ping -> faults -> data PIDs -> ping). A pending user command pre-empts it.
 func (m *MEMS3) sendNextCommand(previousResponse []byte) {
-	m.state.Lock()
-	cmd := m.state.UserCommand
-	m.state.Unlock()
-
-	if cmd != "" {
-		command, ok := userCommands[cmd]
-		if ok {
-			m.state.Lock()
-			m.state.UserCommand = ""
-			m.state.Unlock()
-			m.sendCommand(command)
-			return
-		} else {
-			m.state.LogDebug("Asked to perform a user command but don't understand it")
-		}
-	}
-
-	if slicesEqual(previousResponse, initAccepted) {
-		m.sendCommand(startDiagnostic)
-	} else if slicesEqual(previousResponse, startDiagResponse) {
-		m.sendCommand(requestSeed)
-	} else if slicesEqual(previousResponse, seedResponse) {
-		command := append(sendKey, byte(m.key>>8))
-		command = append(command, byte(m.key&0xFF))
+	if command, ok := m.takeUserCommand(); ok {
 		m.sendCommand(command)
-	} else if slicesEqual(previousResponse, keyAcceptResponse) {
-		m.sendCommand(pingCommand)
-	} else if slicesEqual(previousResponse, pongResponse) {
-		m.sendCommand(requestFaultsCommand)
-	} else if slicesEqual(previousResponse, responseFaults) {
-		m.sendCommand(requestData00)
-	} else if slicesEqual(previousResponse, responseData00) {
-		m.sendCommand(requestData06)
-	} else if slicesEqual(previousResponse, responseData06) {
-		m.sendCommand(requestData0A)
-	} else if slicesEqual(previousResponse, responseData0A) {
-		m.sendCommand(requestData0B)
-	} else if slicesEqual(previousResponse, responseData0B) {
-		m.sendCommand(requestData21)
-	} else if slicesEqual(previousResponse, responseData21) {
-		m.sendCommand(pingCommand)
-	} else if slicesEqual(previousResponse, faultsClearedResponse) {
-		m.sendCommand(requestFaultsCommand)
-	} else {
-		m.sendCommand(pingCommand)
+		return
 	}
+
+	if slicesEqual(previousResponse, seedResponse) {
+		// Build on a fresh slice: appending to the package-level sendKey would
+		// write through to it the moment that literal gained spare capacity.
+		command := make([]byte, 0, len(sendKey)+2)
+		command = append(command, sendKey...)
+		command = append(command, byte(m.key>>8), byte(m.key&0xFF))
+		m.sendCommand(command)
+		return
+	}
+
+	if next, ok := nextAfterResponse[string(previousResponse)]; ok {
+		m.sendCommand(next)
+		return
+	}
+
+	m.sendCommand(pingCommand)
 }
 
 // sendCommand frames and writes a MEMS 3 command.
@@ -408,7 +400,11 @@ func (m *MEMS3) sendNextCommand(previousResponse []byte) {
 // replies with the same header, which is how the read loop tells a response apart
 // from a request echo.
 func (m *MEMS3) sendCommand(data []byte) {
-	output := requestHeader
+	// Copy the header rather than appending to it: `output := requestHeader`
+	// followed by append writes through to the package-level slice as soon as it
+	// has spare capacity.
+	output := make([]byte, 0, len(requestHeader)+2+len(data))
+	output = append(output, requestHeader...)
 	output = append(output, byte(len(data)))
 	output = append(output, data...)
 	output = append(output, xorAllBytes(output))
