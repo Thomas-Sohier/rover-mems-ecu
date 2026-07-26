@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -52,15 +53,31 @@ func main() {
 	if err := bluetooth.SetupAgent(); err != nil {
 		log.Printf("bluetooth: setup agent: %v", err)
 	}
+
+	var wg sync.WaitGroup
 	if bleEnabled {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			if err := ble.Run(ctx, npStore, navStore, notifStore, huStore, bleName); err != nil {
 				log.Printf("ble: %v", err)
 			}
 		}()
 	}
-	go web.NewServer(state, npStore, navStore, notifStore, huStore).Run(ctx, httpPort)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		web.NewServer(state, npStore, navStore, notifStore, huStore).Run(ctx, httpPort)
+	}()
+
 	runEventLoop(ctx, state)
+
+	// runEventLoop returns as soon as ctx is cancelled. Without this wait main
+	// returns immediately and the process exits mid-flight, so the HTTP server's
+	// 5s graceful shutdown never actually completes and in-flight requests and
+	// WebSocket connections are severed rather than closed.
+	wg.Wait()
 }
 
 func parseFlags(state *ecu.State, args []string) (httpPort, bleName string, bleEnabled bool) {
