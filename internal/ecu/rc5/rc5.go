@@ -123,14 +123,23 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 
 	// Wake pattern: a long idle (line high), then alternating low/high pulses.
 	// A low period is Break(d) (asserts the line low for d); a high period is a
-	// plain sleep with the line idling high.
+	// plain sleep with the line idling high. A failed Break leaves the ECU asleep,
+	// so report it rather than waiting out the read loop for a misleading timeout.
 	time.Sleep(2000 * time.Millisecond) // idle
-	sp.Break(200 * time.Millisecond)    // start bit (low)
-	time.Sleep(400 * time.Millisecond)  // high
-	sp.Break(400 * time.Millisecond)    // low
-	time.Sleep(400 * time.Millisecond)  // high
-	sp.Break(400 * time.Millisecond)    // low
-	time.Sleep(200 * time.Millisecond)  // stop (high)
+	for _, step := range []struct {
+		low  time.Duration
+		high time.Duration
+	}{
+		{200 * time.Millisecond, 400 * time.Millisecond}, // start bit, then high
+		{400 * time.Millisecond, 400 * time.Millisecond},
+		{400 * time.Millisecond, 200 * time.Millisecond}, // last high is the stop
+	} {
+		if err := sp.Break(step.low); err != nil {
+			sp.Close()
+			return fmt.Errorf("RC5 wake pulse: %w", err)
+		}
+		time.Sleep(step.high)
+	}
 
 	initBuffer := make([]byte, 0)
 	initLoops := 0
@@ -145,7 +154,14 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 		rb := make([]byte, 128)
 		n, err := sp.Read(rb[:])
 		if err != nil {
-			continue
+			// A timeout is the expected "nothing yet" case; anything else (a
+			// closed or unplugged port) will never recover, so fail now instead
+			// of spinning out the loop and reporting a bogus wake-up timeout.
+			var te interface{ Timeout() bool }
+			if !errors.As(err, &te) || !te.Timeout() {
+				sp.Close()
+				return fmt.Errorf("RC5 read during wake-up: %w", err)
+			}
 		}
 		if n == 0 {
 			continue
@@ -168,14 +184,15 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 			r.state.Connected = true
 			r.state.Unlock()
 			return nil
-		} else {
-			sp.Close()
-			return errors.New("Unsure what RC5 sent back, aborting")
 		}
+		// Wrong bytes means the wrong ECU or the wrong baud rate. Report what
+		// actually arrived — without it this failure is undiagnosable.
+		sp.Close()
+		return fmt.Errorf("unexpected RC5 wake-up reply % X, want % X", initBuffer[0:3], wokeResponse)
 	}
 
 	sp.Close()
-	return errors.New("Timed out waiting for RC5 to wake up")
+	return errors.New("timed out waiting for RC5 to wake up")
 }
 
 // ReadData runs the RC5 request/response loop.

@@ -325,12 +325,16 @@ func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
 func (m *MEMS2J) wakeUp() error {
 	time.Sleep(200 * time.Millisecond) // idle line high
 
-	m.sp.Break(25 * time.Millisecond) // wake pulse: line low
+	if err := m.sp.Break(25 * time.Millisecond); err != nil { // wake pulse: line low
+		return fmt.Errorf("2J wake pulse: %w", err)
+	}
 	time.Sleep(25 * time.Millisecond) // line high
 
 	time.Sleep(50 * time.Millisecond)
 
-	m.sp.Write(initCommand)
+	if _, err := m.sp.Write(initCommand); err != nil {
+		return fmt.Errorf("2J init command: %w", err)
+	}
 	m.logDebug("Done sending init command")
 
 	return nil
