@@ -4,3 +4,7 @@ debug.log
 *.bin
 rover-mems-agent
 rover-mems-agent.*
+# Cross-compiled binaries, named as CI and the Build & Run section produce them.
+rover-mems-linux-*
+# Serial traces from -capture.
+*.kline.log
