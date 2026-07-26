@@ -40,15 +40,33 @@ type Port interface {
 // Open opens the named port at the given baud rate, 8 data bits, 1 stop bit and
 // the requested parity. The returned Port has no read timeout configured yet;
 // callers set one with SetReadTimeout.
+//
+// When EnableCapture has been called the port is wrapped in a decorator that
+// appends a timestamped trace of every transfer to the capture file. A capture
+// file that cannot be opened fails the Open: it is only ever requested
+// explicitly, and silently running untraced is exactly the sort of quiet
+// degradation these traces exist to find.
 func Open(name string, baud int, parity Parity) (Port, error) {
 	p := bugst.NoParity
 	if parity == EvenParity {
 		p = bugst.EvenParity
 	}
-	return bugst.Open(name, &bugst.Mode{
+	port, err := bugst.Open(name, &bugst.Mode{
 		BaudRate: baud,
 		DataBits: 8,
 		Parity:   p,
 		StopBits: bugst.OneStopBit,
 	})
+	if err != nil {
+		return nil, err
+	}
+	if capturePath == "" {
+		return port, nil
+	}
+	captured, err := newCapturePort(port, capturePath, name, baud, parity)
+	if err != nil {
+		port.Close()
+		return nil, err
+	}
+	return captured, nil
 }

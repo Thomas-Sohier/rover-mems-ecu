@@ -44,6 +44,29 @@ go build -o rover-mems-agent ./...
 | `-serialport` | e.g. `/dev/ttyUSB0`                    | Serial port (auto-detected if omitted) |
 | `-ecutype`    | `1.x`, `1.9`, `2J`, `3`, `rc5`, `fake` | ECU variant                            |
 | `-mode`       | `prod` (default), `debug`              | `debug` enables byte-level logging     |
+| `-capture`    | e.g. `/tmp/kline.log`                  | Timestamped trace of every serial transfer |
+
+### Capturing a K-line trace
+
+`-capture` appends a microsecond-resolution log of every byte in and out, plus
+the requested and achieved width of each break pulse. It is the tool for
+bringing up a new ECU or adapter, where the question is usually about *timing*
+rather than about decoded values:
+
+```bash
+./rover-mems-agent -serialport /dev/ttyUSB0 -ecutype 1.9 -capture /tmp/kline.log
+```
+
+Use it instead of `-mode debug`, not alongside it: the debug log goes to stdout
+synchronously, and on a slow console that is easily worth several milliseconds
+of the ISO 9141 timing windows the trace is measuring.
+
+On an FTDI adapter, drop the latency timer first — the chip holds short packets
+for 16 ms by default, which is most of the 25–50 ms handshake window:
+
+```bash
+echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+```
 
 ### Testing & linting
 

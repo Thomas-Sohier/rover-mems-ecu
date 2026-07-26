@@ -42,6 +42,34 @@ add to that list rather than disabling the linter when a serial call's error is 
 | `-mode` | `prod` (default), `debug` | Enables verbose byte-level logging |
 | `-ble` | `true` | Enable the BLE GATT peripheral for the companion phone app |
 | `-blename` | `"Rover MEMS"` | BLE local device name advertised to the phone |
+| `-capture` | e.g. `/tmp/kline.log` | Append a timestamped trace of every serial transfer to this file |
+
+## Serial capture (`-capture`)
+
+`internal/serial/capture.go` decorates the `Port` returned by `serial.Open`,
+appending one line per transfer. It is independent of `-mode debug`: the trace
+is for protocol *timing*, the debug log for decoded state, and debug logging to
+a slow console distorts the timings the trace exists to measure.
+
+```text
+=== open /dev/ttyUSB0 9600 8N1 at 2026-07-26T14:03:11.123456+02:00
+       0.000 CFG   read timeout 500ms
+     500.104 BRK   low for 400ms requested, 400.312ms actual
+    1300.518 BRK   low for 200ms requested, 200.221ms actual
+    2001.882 RX    55 12 80
+    2033.107 TX    7C
+```
+
+Leading column is milliseconds since the header, to microsecond resolution.
+Kinds are `TX`, `RX`, `BRK`, `CFG`, `ERR`, `CLOSE`. Timestamps are taken the
+instant the underlying call returns, before any formatting, so they record when
+a byte arrived rather than when it was written down. Reads that return no bytes
+are not traced — the MEMS 1.x loop polls a non-blocking port every 10 ms and
+would otherwise bury the traffic.
+
+`BRK` records requested *and* achieved pulse width, which is what tells you
+whether the 5-baud wake-up waveform (200 ms bit periods) is holding up on the
+target.
 
 ## Now-playing / BLE companion
 

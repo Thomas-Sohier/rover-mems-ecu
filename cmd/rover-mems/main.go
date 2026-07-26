@@ -88,7 +88,14 @@ func parseFlags(state *ecu.State, args []string) (httpPort, bleName string, bleE
 	portFlag := fs.Int("port", 8080, "HTTP server port")
 	bleFlag := fs.Bool("ble", true, "Enable BLE GATT peripheral for companion phone app")
 	bleNameFlag := fs.String("blename", "Rover MEMS", "BLE local device name for advertising")
+	captureFlag := fs.String("capture", "", "Append a timestamped trace of every serial transfer to this file")
 	_ = fs.Parse(args) // flag.ExitOnError: Parse never returns an error here
+
+	// Set before anything can open a port. Capture is independent of -mode
+	// debug: the trace is for protocol timing, the debug log for decoded state,
+	// and enabling debug logging on a slow console distorts the very timings the
+	// trace is meant to measure.
+	serial.EnableCapture(*captureFlag)
 
 	if *serialPortFlag != "" {
 		state.SelectedSerialPort = *serialPortFlag
@@ -109,6 +116,9 @@ func initializeAgent(state *ecu.State) {
 	state.LogDebug("Debug mode enabled")
 	state.LogDebug("Selected serial port: " + state.SelectedSerialPort)
 	state.LogDebug("Selected ECU type: " + state.EcuType)
+	if serial.CaptureEnabled() {
+		log.Println("serial capture enabled")
+	}
 }
 
 const (
