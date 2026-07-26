@@ -168,6 +168,24 @@ var (
 
 	refusePing = []byte{0x7F, 0x3e, 0x10}
 
+	// pollOrder is the fixed cycle of requests issued once the session is
+	// unlocked: the fault list first, then every data PID, then back to ping.
+	// The ECU answers request 21 xx with response 61 xx, which is what lets
+	// nextAfterPoll key itself off the request bytes.
+	pollOrder = [][]byte{
+		requestFaultsCommand,
+		requestData00, requestData01, requestData02, requestData03,
+		requestData05, requestData06, requestData07, requestData08,
+		requestData09, requestData0A, requestData0B, requestData0C,
+		requestData0D, requestData0F, requestData10, requestData11,
+		requestData12, requestData13, requestData21, requestData25,
+		requestData3A,
+	}
+
+	// nextAfterPoll maps a two-byte response header to the request that follows
+	// it. Derived from pollOrder so the polling sequence is stated exactly once.
+	nextAfterPoll = buildNextAfterPoll()
+
 	userCommands = map[string][]byte{
 		"clearfaults":  clearFaultsCommand,
 		"learnimmo":    learnImmoCommand,
@@ -184,6 +202,41 @@ var (
 		"service33_d7": requestService33_d7,
 	}
 )
+
+// buildNextAfterPoll turns pollOrder into a response-header -> next-request
+// lookup. The last entry wraps back to ping, restarting the cycle.
+func buildNextAfterPoll() map[[2]byte][]byte {
+	m := make(map[[2]byte][]byte, len(pollOrder))
+	for i, req := range pollOrder {
+		next := pingCommand
+		if i+1 < len(pollOrder) {
+			next = pollOrder[i+1]
+		}
+		m[[2]byte{0x61, req[1]}] = next
+	}
+	return m
+}
+
+// takeUserCommand consumes any pending user command, returning the bytes to
+// send. ok is false when nothing is pending or the name is unknown; either way
+// the pending command is cleared so an unrecognised name cannot wedge the loop.
+func (m *MEMS2J) takeUserCommand() (command []byte, ok bool) {
+	m.state.Lock()
+	name := m.state.UserCommand
+	m.state.UserCommand = ""
+	m.state.Unlock()
+
+	if name == "" {
+		return nil, false
+	}
+	command, ok = userCommands[name]
+	if !ok {
+		m.logDebug("Unknown user command: " + name)
+		return nil, false
+	}
+	m.logDebug("Running 2J user command: " + name)
+	return command, true
+}
 
 // sendCommand frames and writes a 2J command.
 //
@@ -221,97 +274,58 @@ func (m *MEMS2J) sendCommand(command []byte) {
 // ping. A pending user command pre-empts the sequence, and a refused ping
 // (7F 3E 10) means the session dropped, so we restart from requestSeed.
 func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
-	m.state.Lock()
-	cmd := m.state.UserCommand
-	m.state.Unlock()
+	if command, ok := m.takeUserCommand(); ok {
+		m.sendCommand(command)
+		return
+	}
 
-	if cmd != "" {
-		command, ok := userCommands[cmd]
-		if ok {
-			m.logDebug("Running 2J user command: " + cmd)
-			m.state.Lock()
-			m.state.UserCommand = ""
-			m.state.Unlock()
+	// Handshake replies are fixed whole frames.
+	switch {
+	case utils.SlicesEqual(previousResponse, wokeResponse):
+		// Settle time before the ECU will accept the diagnostic session request.
+		// Kept here rather than in parseResponse, which runs with the State write
+		// lock held and so must not block.
+		time.Sleep(50 * time.Millisecond)
+		m.sendCommand(startDiagnostic)
+		return
+	case utils.SlicesEqual(previousResponse, startDiagResponse):
+		m.sendCommand(requestSeed)
+		return
+	case utils.SlicesEqual(previousResponse, keyAcceptResponse):
+		m.sendCommand(pingCommand)
+		return
+	case utils.SlicesEqual(previousResponse, pongResponse),
+		utils.SlicesEqual(previousResponse, faultsClearedResponse):
+		m.sendCommand(requestFaultsCommand)
+		return
+	case utils.SlicesEqual(previousResponse, responseLearnImmoCommand):
+		m.sendCommand(requestData00)
+		return
+	case utils.SlicesEqual(previousResponse, refusePing):
+		// Session dropped; re-run security access.
+		m.sendCommand(requestSeed)
+		return
+	}
+
+	// Everything else is recognised by its two-byte header.
+	if len(previousResponse) >= 2 {
+		if utils.SlicesEqual(previousResponse[0:2], seedResponse) {
+			// Build on a fresh slice: appending to the package-level sendKey would
+			// write through to it the moment that literal gained spare capacity.
+			command := make([]byte, 0, len(sendKey)+2)
+			command = append(command, sendKey...)
+			command = append(command, byte(m.key>>8), byte(m.key&0xFF))
 			m.sendCommand(command)
 			return
-		} else {
-			m.logDebug("Unknown user command: " + cmd)
-			m.state.Lock()
-			m.state.UserCommand = ""
-			m.state.Unlock()
+		}
+		if next, ok := nextAfterPoll[[2]byte{previousResponse[0], previousResponse[1]}]; ok {
+			m.sendCommand(next)
+			return
 		}
 	}
 
-	if utils.SlicesEqual(previousResponse, wokeResponse) {
-		// Settle time after the wake-up before the ECU will accept the diagnostic
-		// session request. Kept here rather than in parseResponse, which runs with
-		// the State write lock held and so must not block.
-		time.Sleep(50 * time.Millisecond)
-		m.sendCommand(startDiagnostic)
-	} else if utils.SlicesEqual(previousResponse, startDiagResponse) {
-		m.sendCommand(requestSeed)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], seedResponse) {
-		command := append(sendKey, byte(m.key>>8))
-		command = append(command, byte(m.key&0xFF))
-		m.sendCommand(command)
-	} else if utils.SlicesEqual(previousResponse, keyAcceptResponse) {
-		m.sendCommand(pingCommand)
-	} else if utils.SlicesEqual(previousResponse, pongResponse) {
-		m.sendCommand(requestFaultsCommand)
-	} else if utils.SlicesEqual(previousResponse, faultsClearedResponse) {
-		m.sendCommand(requestFaultsCommand)
-	} else if utils.SlicesEqual(previousResponse, responseLearnImmoCommand) {
-		m.sendCommand(requestData00)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], faultsResponse[0:2]) {
-		m.sendCommand(requestData00)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData00) {
-		m.sendCommand(requestData01)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData01) {
-		m.sendCommand(requestData02)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData02) {
-		m.sendCommand(requestData03)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData03) {
-		m.sendCommand(requestData05)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData05) {
-		m.sendCommand(requestData06)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData06) {
-		m.sendCommand(requestData07)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData07) {
-		m.sendCommand(requestData08)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData08) {
-		m.sendCommand(requestData09)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData09) {
-		m.sendCommand(requestData0A)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0A) {
-		m.sendCommand(requestData0B)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0B) {
-		m.sendCommand(requestData0C)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0C) {
-		m.sendCommand(requestData0D)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0D) {
-		m.sendCommand(requestData0F)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData0F) {
-		m.sendCommand(requestData10)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData10) {
-		m.sendCommand(requestData11)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData11) {
-		m.sendCommand(requestData12)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData12) {
-		m.sendCommand(requestData13)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData13) {
-		m.sendCommand(requestData21)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData21) {
-		m.sendCommand(requestData25)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData25) {
-		m.sendCommand(requestData3A)
-	} else if len(previousResponse) >= 2 && utils.SlicesEqual(previousResponse[0:2], responseData3A) {
-		m.sendCommand(pingCommand)
-	} else if utils.SlicesEqual(previousResponse, refusePing) {
-		m.sendCommand(requestSeed)
-	} else {
-		m.logDebug("Falling back to ping command")
-		m.sendCommand(pingCommand)
-	}
+	m.logDebug("Falling back to ping command")
+	m.sendCommand(pingCommand)
 }
 
 // wakeUp performs the 2J fast-init and sends the start-communication request.
