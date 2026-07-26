@@ -281,8 +281,21 @@ READLOOP:
 
 	}
 	if readLoops >= readLoopsLimit {
-		m.state.LogDebugf("Timed out — buffer: %d bytes\n%s", len(buffer), hex.Dump(buffer))
-		return errors.New("MEMS 1.x timed out")
+		// Name the command that went unanswered and say whether we ever saw its
+		// K-line echo. Between them those two facts identify the failure without
+		// a second run: no echo at all points at the adapter or the wiring,
+		// whereas an echo with no reply points at the ECU or at that particular
+		// command being wrong for this variant. A bare "timed out" identified
+		// neither, which made bring-up on real hardware guesswork.
+		echoState := "echo not seen"
+		if !kline {
+			echoState = "echo tracking off"
+		} else if m.gotKlineEcho {
+			echoState = "echo consumed"
+		}
+		m.state.LogDebugf("Timed out waiting for a reply to %02X (%s) — buffer: %d bytes\n%s",
+			m.lastKlineByte, echoState, len(buffer), hex.Dump(buffer))
+		return fmt.Errorf("MEMS 1.x timed out waiting for a reply to %02X (%s)", m.lastKlineByte, echoState)
 	}
 	m.state.LogDebug("Read loop exited normally")
 
