@@ -27,21 +27,22 @@ func (r *Reader) Start(sp Port) {
 	r.once = sync.Once{}
 	done := r.done
 	go func() {
+		// Reused across iterations: bytes are pushed onto the channel before the
+		// next Read, so the buffer is never aliased.
+		rb := make([]byte, 256)
 		for {
 			select {
 			case <-done:
 				return
 			default:
 			}
-			rb := make([]byte, 256)
-			n, err := sp.Read(rb[:])
+			n, err := sp.Read(rb)
 			if err != nil {
 				var te interface{ Timeout() bool }
 				if !errors.As(err, &te) || !te.Timeout() {
 					return
 				}
 			}
-			rb = rb[0:n]
 			for i := 0; i < n; i++ {
 				select {
 				case r.channel <- rb[i]:

@@ -145,14 +145,16 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 	initLoops := 0
 	initLoopsLimit := 100
 
+	// Reused across iterations; contents are copied into initBuffer immediately.
+	rb := make([]byte, 128)
+
 	for initLoops < initLoopsLimit {
 		initLoops++
 		if initLoops > 1 {
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		rb := make([]byte, 128)
-		n, err := sp.Read(rb[:])
+		n, err := sp.Read(rb)
 		if err != nil {
 			// A timeout is the expected "nothing yet" case; anything else (a
 			// closed or unplugged port) will never recover, so fail now instead
@@ -167,8 +169,7 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 			continue
 		}
 
-		rb = rb[0:n]
-		initBuffer = append(initBuffer, rb...)
+		initBuffer = append(initBuffer, rb[:n]...)
 
 		for len(initBuffer) > 0 && initBuffer[0] == 0x00 {
 			initBuffer = initBuffer[1:]
@@ -212,6 +213,9 @@ func (r *RC5) ReadData(ctx context.Context) error {
 	buffer := make([]byte, 0)
 	readLoops := 0
 
+	// Reused across iterations; contents are copied into buffer immediately.
+	rb := make([]byte, 128)
+
 	for readLoops < 100 {
 		select {
 		case <-ctx.Done():
@@ -224,16 +228,14 @@ func (r *RC5) ReadData(ctx context.Context) error {
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		rb := make([]byte, 128)
-		n, err := r.sp.Read(rb[:])
+		n, err := r.sp.Read(rb)
 		if err != nil {
 			var te interface{ Timeout() bool }
 			if !errors.As(err, &te) || !te.Timeout() {
 				return fmt.Errorf("serial read: %w", err)
 			}
 		}
-		rb = rb[0:n]
-		buffer = append(buffer, rb...)
+		buffer = append(buffer, rb[:n]...)
 		if n > 0 {
 			readLoops = 0
 		}

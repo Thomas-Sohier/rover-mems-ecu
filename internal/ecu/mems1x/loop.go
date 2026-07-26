@@ -150,6 +150,11 @@ func (m *MEMS1x) loop(ctx context.Context, kline bool) ([]byte, error) {
 	readLoops := 0
 	readLoopsLimit := 200
 
+	// Reused across iterations: the bytes are copied into buffer immediately, so
+	// nothing outlives the loop body. Allocating per iteration churned ~13 KB/s
+	// at the loop's 10 ms cadence, forever, on an embedded target.
+	rb := make([]byte, 128)
+
 READLOOP:
 	for readLoops < readLoopsLimit {
 		select {
@@ -163,16 +168,14 @@ READLOOP:
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		rb := make([]byte, 128)
-		n, err := sp.Read(rb[:])
+		n, err := sp.Read(rb)
 		if err != nil {
 			var te interface{ Timeout() bool }
 			if !errors.As(err, &te) || !te.Timeout() {
 				return nil, fmt.Errorf("serial read: %w", err)
 			}
 		}
-		rb = rb[0:n]
-		buffer = append(buffer, rb...)
+		buffer = append(buffer, rb[:n]...)
 		if n > 0 {
 			readLoops = 0
 		}

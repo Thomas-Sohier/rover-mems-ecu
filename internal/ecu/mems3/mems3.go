@@ -140,6 +140,9 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 	readLoops := 0
 	readLoopsLimit := 200
 
+	// Reused across iterations; contents are copied into buffer immediately.
+	rb := make([]byte, 128)
+
 	for readLoops < readLoopsLimit {
 		select {
 		case <-ctx.Done():
@@ -152,16 +155,14 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 			time.Sleep(10 * time.Millisecond)
 		}
 
-		rb := make([]byte, 128)
-		n, err := m.sp.Read(rb[:])
+		n, err := m.sp.Read(rb)
 		if err != nil {
 			var te interface{ Timeout() bool }
 			if !errors.As(err, &te) || !te.Timeout() {
 				return fmt.Errorf("serial read: %w", err)
 			}
 		}
-		rb = rb[0:n]
-		buffer = append(buffer, rb...)
+		buffer = append(buffer, rb[:n]...)
 		if n > 0 {
 			readLoops = 0
 		}
