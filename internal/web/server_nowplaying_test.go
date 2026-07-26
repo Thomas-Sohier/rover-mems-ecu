@@ -95,3 +95,52 @@ func TestWSNewPlaying_InitialAndPushed(t *testing.T) {
 		t.Fatalf("unexpected title: %q", snap2.Metadata.Title)
 	}
 }
+
+func TestCheckOrigin(t *testing.T) {
+	tests := []struct {
+		name   string
+		origin string
+		want   bool
+	}{
+		{"no origin (non-browser client)", "", true},
+		{"localhost", "http://localhost:8080", true},
+		{"localhost no port", "http://localhost", true},
+		{"loopback v4", "http://127.0.0.1:8080", true},
+		{"loopback v6", "http://[::1]:8080", true},
+		{"https localhost", "https://localhost:8080", true},
+
+		{"foreign origin", "http://evil.example", false},
+		{"foreign origin naming us in path", "http://evil.example/localhost", false},
+		// The classic bypass: a hostname that merely starts with localhost.
+		{"prefix lookalike", "http://localhost.evil.example", false},
+		{"loopback lookalike", "http://127.0.0.1.evil.example", false},
+		{"null origin", "null", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/ws", nil)
+			r.Host = "localhost:8080"
+			if tc.origin != "" {
+				r.Header.Set("Origin", tc.origin)
+			}
+
+			if got := checkOrigin(r); got != tc.want {
+				t.Errorf("checkOrigin(Origin: %q) = %v, want %v", tc.origin, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCheckOriginIgnoresHost is the point of the change: a hostile page can set
+// the Host header to ours simply by pointing its WebSocket at us, so Host must
+// not be what grants access.
+func TestCheckOriginIgnoresHost(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	r.Host = "localhost:8080"
+	r.Header.Set("Origin", "http://evil.example")
+
+	if checkOrigin(r) {
+		t.Error("a localhost Host let a foreign Origin through")
+	}
+}

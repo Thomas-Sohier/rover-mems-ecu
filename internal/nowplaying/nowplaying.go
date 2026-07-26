@@ -1,6 +1,7 @@
 package nowplaying
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -244,15 +245,20 @@ func (s *Store) Snapshot() Snapshot {
 	return s.snapshotLocked()
 }
 
-// Art returns the current cover art JPEG bytes and art ID. ok is false when
-// no art has been received.
+// Art returns a copy of the current cover art JPEG bytes and its art ID. ok is
+// false when no art has been received.
+//
+// The copy is deliberate. Handing out the internal slice happens to be safe
+// today only because HandleArtChunk always assembles into a fresh one; that is
+// an unstated invariant that any future buffer reuse would break, handing
+// callers a slice being rewritten underneath them.
 func (s *Store) Art() (artID string, jpeg []byte, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.art) == 0 {
 		return "", nil, false
 	}
-	return s.artID, s.art, true
+	return s.artID, bytes.Clone(s.art), true
 }
 
 // Subscribe returns a channel that receives a Snapshot whenever metadata or

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -33,10 +34,29 @@ const (
 var wsupgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		host := r.Host
-		return strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") || host == "localhost"
-	},
+	CheckOrigin:     checkOrigin,
+}
+
+// checkOrigin guards against cross-site WebSocket hijacking.
+//
+// It must test the Origin header, not r.Host: Host is the address the browser
+// was told to connect to, which a hostile page can set to ours simply by
+// pointing its WebSocket at us. Origin is the page making the request, which
+// the browser sets and script cannot forge.
+//
+// A request with no Origin is allowed: non-browser clients (curl, the phone
+// app, tests) omit it, and they are not subject to CSWSH in the first place.
+func checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // Server holds the web server dependencies.
@@ -148,7 +168,7 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 	})
 
 	router.GET("/ws/nowplaying", func(c *gin.Context) {
-		s.wsNowPlayingHandler(c.Writer, c.Request, ctx)
+		s.wsNowPlayingHandler(ctx, c.Writer, c.Request)
 	})
 
 	router.GET("/ws/navigation", func(c *gin.Context) {
@@ -316,7 +336,7 @@ func (s *Server) apiNowPlayingArtHandler(c *gin.Context) {
 	c.Data(http.StatusOK, "image/jpeg", jpeg)
 }
 
-func (s *Server) wsNowPlayingHandler(w http.ResponseWriter, r *http.Request, ctx context.Context) {
+func (s *Server) wsNowPlayingHandler(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	conn, err := wsupgrader.Upgrade(w, r, nil)
 	if err != nil {
 		s.state.LogDebug("ws/nowplaying: upgrade failed:", err)
