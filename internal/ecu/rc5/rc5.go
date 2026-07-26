@@ -1,6 +1,7 @@
 package rc5
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -179,7 +180,7 @@ func (r *RC5) Connect(_ context.Context, portName string) error {
 			continue
 		}
 
-		if slicesEqual(initBuffer[0:3], wokeResponse) {
+		if bytes.Equal(initBuffer[0:3], wokeResponse) {
 			r.state.LogDebug("RC5 woke up")
 			r.state.Lock()
 			r.state.Connected = true
@@ -245,14 +246,14 @@ func (r *RC5) ReadData(ctx context.Context) error {
 		}
 
 		if len(buffer) >= 3 {
-			if slicesEqual(buffer[0:3], pingCommand) ||
-				slicesEqual(buffer[0:3], requestFaultsCommand) ||
-				slicesEqual(buffer[0:3], clearFaultsCommand) {
+			if bytes.Equal(buffer[0:3], pingCommand) ||
+				bytes.Equal(buffer[0:3], requestFaultsCommand) ||
+				bytes.Equal(buffer[0:3], clearFaultsCommand) {
 				buffer = buffer[3:]
 				continue
 			}
 
-			if slicesEqual(buffer[0:3], pongResponse) {
+			if bytes.Equal(buffer[0:3], pongResponse) {
 				r.state.LogDebug("< PONG from ECU")
 				buffer = buffer[3:]
 				time.Sleep(200 * time.Millisecond)
@@ -260,7 +261,7 @@ func (r *RC5) ReadData(ctx context.Context) error {
 				continue
 			}
 
-			if slicesEqual(buffer[0:3], faultsClearedResponse) {
+			if bytes.Equal(buffer[0:3], faultsClearedResponse) {
 				r.state.LogDebug("< FAULT CODES CLEARED")
 				r.state.SetAlert("ECU reports faults cleared")
 				buffer = buffer[3:]
@@ -319,15 +320,15 @@ func (r *RC5) sendNextCommand(previousResponse []byte) {
 	r.state.UserCommand = ""
 	r.state.Unlock()
 
-	if slicesEqual(previousResponse, pongResponse) {
+	if bytes.Equal(previousResponse, pongResponse) {
 		if _, err := r.sp.Write(requestFaultsCommand); err != nil {
 			r.state.LogDebugf("serial write failed: %v", err)
 		}
-	} else if slicesEqual(previousResponse, wokeResponse) || slicesEqual(previousResponse, faultsResponse) {
+	} else if bytes.Equal(previousResponse, wokeResponse) || bytes.Equal(previousResponse, faultsResponse) {
 		if _, err := r.sp.Write(pingCommand); err != nil {
 			r.state.LogDebugf("serial write failed: %v", err)
 		}
-	} else if slicesEqual(previousResponse, faultsClearedResponse) {
+	} else if bytes.Equal(previousResponse, faultsClearedResponse) {
 		if _, err := r.sp.Write(requestFaultsCommand); err != nil {
 			r.state.LogDebugf("serial write failed: %v", err)
 		}
@@ -375,16 +376,4 @@ func (r *RC5) Close() error {
 
 func (r *RC5) Type() string {
 	return "rc5"
-}
-
-func slicesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

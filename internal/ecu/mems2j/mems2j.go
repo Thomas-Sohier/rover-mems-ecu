@@ -1,6 +1,7 @@
 package mems2j
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 
 	"rover-mems-agent/internal/ecu"
 	"rover-mems-agent/internal/serial"
-	"rover-mems-agent/pkg/utils"
 )
 
 func init() {
@@ -281,27 +281,27 @@ func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
 
 	// Handshake replies are fixed whole frames.
 	switch {
-	case utils.SlicesEqual(previousResponse, wokeResponse):
+	case bytes.Equal(previousResponse, wokeResponse):
 		// Settle time before the ECU will accept the diagnostic session request.
 		// Kept here rather than in parseResponse, which runs with the State write
 		// lock held and so must not block.
 		time.Sleep(50 * time.Millisecond)
 		m.sendCommand(startDiagnostic)
 		return
-	case utils.SlicesEqual(previousResponse, startDiagResponse):
+	case bytes.Equal(previousResponse, startDiagResponse):
 		m.sendCommand(requestSeed)
 		return
-	case utils.SlicesEqual(previousResponse, keyAcceptResponse):
+	case bytes.Equal(previousResponse, keyAcceptResponse):
 		m.sendCommand(pingCommand)
 		return
-	case utils.SlicesEqual(previousResponse, pongResponse),
-		utils.SlicesEqual(previousResponse, faultsClearedResponse):
+	case bytes.Equal(previousResponse, pongResponse),
+		bytes.Equal(previousResponse, faultsClearedResponse):
 		m.sendCommand(requestFaultsCommand)
 		return
-	case utils.SlicesEqual(previousResponse, responseLearnImmoCommand):
+	case bytes.Equal(previousResponse, responseLearnImmoCommand):
 		m.sendCommand(requestData00)
 		return
-	case utils.SlicesEqual(previousResponse, refusePing):
+	case bytes.Equal(previousResponse, refusePing):
 		// Session dropped; re-run security access.
 		m.sendCommand(requestSeed)
 		return
@@ -309,7 +309,7 @@ func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
 
 	// Everything else is recognised by its two-byte header.
 	if len(previousResponse) >= 2 {
-		if utils.SlicesEqual(previousResponse[0:2], seedResponse) {
+		if bytes.Equal(previousResponse[0:2], seedResponse) {
 			// Build on a fresh slice: appending to the package-level sendKey would
 			// write through to it the moment that literal gained spare capacity.
 			command := make([]byte, 0, len(sendKey)+2)
@@ -362,13 +362,14 @@ func (m *MEMS2J) wakeUp() error {
 // init echo; wait until the full [len][payload][checksum] frame has arrived
 // (len at buffer[0], so packetSize+2 bytes total); discard the echo of the
 // command we just sent; then parse the payload and ask sendNextCommand for the
-// next request. If no bytes arrive for timeoutMs the ECU is considered gone.
+// next request. If no bytes arrive for idleTimeout the ECU is considered gone.
 func (m *MEMS2J) loop(ctx context.Context) error {
-	buffer := make([]byte, 0)
-	lastReceivedData := utils.TimestampMs()
-	timeoutMs := int64(1000)
+	const idleTimeout = 1 * time.Second
 
-	for utils.TimestampMs() < lastReceivedData+timeoutMs {
+	buffer := make([]byte, 0)
+	lastReceivedData := time.Now()
+
+	for time.Since(lastReceivedData) < idleTimeout {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -377,7 +378,7 @@ func (m *MEMS2J) loop(ctx context.Context) error {
 
 		newData := m.reader.Read()
 		if len(newData) > 0 {
-			lastReceivedData = utils.TimestampMs()
+			lastReceivedData = time.Now()
 		}
 		buffer = append(buffer, newData...)
 
@@ -391,7 +392,7 @@ func (m *MEMS2J) loop(ctx context.Context) error {
 			continue
 		}
 
-		if len(buffer) >= 5 && utils.SlicesEqual(buffer[0:len(initCommand)], initCommand) {
+		if len(buffer) >= 5 && bytes.Equal(buffer[0:len(initCommand)], initCommand) {
 			m.logDebug("Got our init echo")
 			buffer = buffer[len(initCommand):]
 			continue
@@ -406,7 +407,7 @@ func (m *MEMS2J) loop(ctx context.Context) error {
 		actualData := buffer[1 : packetSize+1]
 		fullPacket := buffer[0 : packetSize+2]
 
-		if len(m.lastSentCommand) > 0 && len(fullPacket) >= len(m.lastSentCommand) && utils.SlicesEqual(fullPacket[0:len(m.lastSentCommand)], m.lastSentCommand) {
+		if len(m.lastSentCommand) > 0 && len(fullPacket) >= len(m.lastSentCommand) && bytes.Equal(fullPacket[0:len(m.lastSentCommand)], m.lastSentCommand) {
 			buffer = buffer[len(m.lastSentCommand):]
 			continue
 		}
@@ -417,10 +418,9 @@ func (m *MEMS2J) loop(ctx context.Context) error {
 		m.sendNextCommand(actualData)
 	}
 
-	if utils.TimestampMs() >= lastReceivedData+timeoutMs {
-		return errors.New("MEMS 2J timed out")
-	}
-	m.logDebug("Read loop exited normally")
-
-	return nil
+	// The only way out of the loop is its own condition going false, so reaching
+	// here always means the idle timeout elapsed. (Cancellation returns from
+	// inside the loop.) The previous "read loop exited normally" branch here was
+	// unreachable.
+	return errors.New("MEMS 2J timed out")
 }

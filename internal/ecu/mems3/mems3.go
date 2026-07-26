@@ -1,6 +1,7 @@
 package mems3
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -189,7 +190,7 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 			continue
 		}
 
-		if len(buffer) >= 2 && slicesEqual(buffer[0:2], initCommand) {
+		if len(buffer) >= 2 && bytes.Equal(buffer[0:2], initCommand) {
 			m.state.LogDebug("Got our init echo")
 			buffer = buffer[2:]
 			continue
@@ -208,7 +209,7 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 
 		// A frame carrying our own address header is the echo of a request we
 		// sent; the ECU's replies do not repeat it.
-		if slicesEqual(buffer[0:3], requestHeader) {
+		if bytes.Equal(buffer[0:3], requestHeader) {
 			buffer = buffer[totalLength:]
 			continue
 		}
@@ -246,18 +247,18 @@ func (m *MEMS3) ReadData(ctx context.Context) error {
 // inter-frame delay.
 func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
 	switch {
-	case len(actualData) >= 2 && slicesEqual(actualData[0:2], initAccepted):
+	case len(actualData) >= 2 && bytes.Equal(actualData[0:2], initAccepted):
 		m.state.Lock()
 		m.state.Connected = true
 		m.state.Unlock()
 		m.state.LogDebug("< ECU woke up")
 		return initAccepted, true
 
-	case slicesEqual(actualData, startDiagResponse):
+	case bytes.Equal(actualData, startDiagResponse):
 		m.state.LogDebug("< Diag mode accepted")
 		return startDiagResponse, true
 
-	case len(actualData) >= 4 && slicesEqual(actualData[0:2], seedResponse):
+	case len(actualData) >= 4 && bytes.Equal(actualData[0:2], seedResponse):
 		m.seed = int(actualData[2])<<8 + int(actualData[3])
 		m.state.LogDebugf("< seed %d", m.seed)
 		if m.seed == 0 {
@@ -270,20 +271,20 @@ func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
 		m.key = ecu.GenerateKey(m.seed)
 		return seedResponse, true
 
-	case slicesEqual(actualData, keyAcceptResponse):
+	case bytes.Equal(actualData, keyAcceptResponse):
 		m.state.LogDebug("< Key accepted, collecting data...")
 		return keyAcceptResponse, true
 
-	case slicesEqual(actualData, pongResponse):
+	case bytes.Equal(actualData, pongResponse):
 		m.state.LogDebug(".")
 		return pongResponse, true
 
-	case slicesEqual(actualData, faultsClearedResponse):
+	case bytes.Equal(actualData, faultsClearedResponse):
 		m.state.SetAlert("ECU reports faults cleared")
 		m.state.LogDebug("< FAULTS CLEARED")
 		return faultsClearedResponse, true
 
-	case len(actualData) >= len(responseFaults) && slicesEqual(actualData[0:len(responseFaults)], responseFaults):
+	case len(actualData) >= len(responseFaults) && bytes.Equal(actualData[0:len(responseFaults)], responseFaults):
 		m.parseFaults(actualData)
 		return responseFaults, true
 	}
@@ -297,7 +298,7 @@ func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
 	defer m.state.Unlock()
 
 	switch {
-	case slicesEqual(actualData[0:2], responseData00):
+	case bytes.Equal(actualData[0:2], responseData00):
 		if len(actualData) < 12 {
 			return nil, false
 		}
@@ -306,7 +307,7 @@ func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
 		m.state.Data["intake_air_temp"] = float32(int(actualData[10])<<8+int(actualData[11])-2730) / 10
 		return responseData00, true
 
-	case slicesEqual(actualData[0:2], responseData06):
+	case bytes.Equal(actualData[0:2], responseData06):
 		if len(actualData) < 12 {
 			return nil, false
 		}
@@ -315,7 +316,7 @@ func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
 		m.state.Data["rpm"] = float32(int(actualData[10])<<8 + int(actualData[11]))
 		return responseData06, true
 
-	case slicesEqual(actualData[0:2], responseData0A):
+	case bytes.Equal(actualData[0:2], responseData0A):
 		if len(actualData) < 6 {
 			return nil, false
 		}
@@ -323,7 +324,7 @@ func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
 		m.state.Data["lambda_mv"] = float32(int(actualData[4])<<8 + int(actualData[5]))
 		return responseData0A, true
 
-	case slicesEqual(actualData[0:2], responseData0B):
+	case bytes.Equal(actualData[0:2], responseData0B):
 		if len(actualData) < 6 {
 			return nil, false
 		}
@@ -331,7 +332,7 @@ func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
 		m.state.Data["coil_2_time_uS"] = float32(int(actualData[4])<<8 + int(actualData[5]))
 		return responseData0B, true
 
-	case slicesEqual(actualData[0:2], responseData21):
+	case bytes.Equal(actualData[0:2], responseData21):
 		if len(actualData) < 4 {
 			return nil, false
 		}
@@ -372,7 +373,7 @@ func (m *MEMS3) sendNextCommand(previousResponse []byte) {
 		return
 	}
 
-	if slicesEqual(previousResponse, seedResponse) {
+	if bytes.Equal(previousResponse, seedResponse) {
 		// Build on a fresh slice: appending to the package-level sendKey would
 		// write through to it the moment that literal gained spare capacity.
 		command := make([]byte, 0, len(sendKey)+2)
@@ -459,18 +460,6 @@ func (m *MEMS3) Close() error {
 
 func (m *MEMS3) Type() string {
 	return "3"
-}
-
-func slicesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func xorAllBytes(data []byte) byte {
