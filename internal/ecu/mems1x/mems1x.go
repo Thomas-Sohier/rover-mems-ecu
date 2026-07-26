@@ -48,8 +48,7 @@ func (m *MEMS1x) Connect(_ context.Context, portName string) error {
 }
 
 func (m *MEMS1x) ReadData(ctx context.Context) error {
-	_, err := m.loop(ctx, true)
-	return err
+	return m.loop(ctx, true)
 }
 
 func (m *MEMS1x) Close() error {

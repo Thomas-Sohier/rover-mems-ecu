@@ -58,6 +58,17 @@ var (
 		"increaseFuelTrim2":             increaseFuelTrim2,
 		"decreaseFuelTrim2":             decreaseFuelTrim2,
 	}
+
+	// commandNames is the reverse of userCommands, so the read loop can name an
+	// acknowledged command with one lookup instead of scanning all 22 entries
+	// for every byte it processes.
+	commandNames = func() map[byte]string {
+		m := make(map[byte]string, len(userCommands))
+		for name, b := range userCommands {
+			m[b] = name
+		}
+		return m
+	}()
 )
 
 // nextCommand decides which byte to send next, given the byte the ECU just
@@ -77,22 +88,15 @@ var (
 func (m *MEMS1x) nextCommand(previousResponse byte) byte {
 	m.state.Lock()
 	cmd := m.state.UserCommand
+	m.state.UserCommand = ""
 	m.state.Unlock()
 
 	if cmd != "" {
-		command, ok := userCommands[cmd]
-		if ok {
-			m.state.Lock()
-			m.state.UserCommand = ""
-			m.state.Unlock()
+		if command, ok := userCommands[cmd]; ok {
 			m.state.LogDebug("> " + cmd)
 			return command
-		} else {
-			m.state.LogDebug("Unknown user command:", cmd)
-			m.state.Lock()
-			m.state.UserCommand = ""
-			m.state.Unlock()
 		}
+		m.state.LogDebug("Unknown user command:", cmd)
 	}
 
 	switch previousResponse {
@@ -142,7 +146,7 @@ func (m *MEMS1x) send(sp serial.Port, data byte) {
 // full frame is buffer[1]+1 bytes — we wait until that many bytes have arrived
 // before parsing. readLoops counts consecutive empty reads and aborts after the
 // limit so a dead/unplugged ECU surfaces as a timeout instead of hanging.
-func (m *MEMS1x) loop(ctx context.Context, kline bool) ([]byte, error) {
+func (m *MEMS1x) loop(ctx context.Context, kline bool) error {
 	sp := m.sp
 	m.send(sp, 0xCA)
 
@@ -159,7 +163,7 @@ READLOOP:
 	for readLoops < readLoopsLimit {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		default:
 		}
 
@@ -172,7 +176,7 @@ READLOOP:
 		if err != nil {
 			var te interface{ Timeout() bool }
 			if !errors.As(err, &te) || !te.Timeout() {
-				return nil, fmt.Errorf("serial read: %w", err)
+				return fmt.Errorf("serial read: %w", err)
 			}
 		}
 		buffer = append(buffer, rb[:n]...)
@@ -200,16 +204,12 @@ READLOOP:
 		}
 
 		if len(buffer) >= 2 {
-			for key := range userCommands {
-				if buffer[0] == userCommands[key] {
-					m.state.LogDebug("< " + key)
-					m.state.Lock()
-					m.state.SetAlertLocked("ECU accepted " + key)
-					m.state.Unlock()
-					m.send(sp, m.nextCommand(buffer[0]))
-					buffer = nil
-					continue READLOOP
-				}
+			if name, ok := commandNames[buffer[0]]; ok {
+				m.state.LogDebug("< " + name)
+				m.state.SetAlert("ECU accepted " + name)
+				m.send(sp, m.nextCommand(buffer[0]))
+				buffer = nil
+				continue READLOOP
 			}
 		}
 
@@ -218,9 +218,7 @@ READLOOP:
 		case requestClearFaults:
 			if len(buffer) >= 2 && buffer[1] == 0x00 {
 				m.state.LogDebug("< FAULTS CLEARED")
-				m.state.Lock()
-				m.state.SetAlertLocked("ECU reports faults cleared")
-				m.state.Unlock()
+				m.state.SetAlert("ECU reports faults cleared")
 				m.send(sp, m.nextCommand(buffer[0]))
 				buffer = nil
 				continue
@@ -284,11 +282,11 @@ READLOOP:
 	}
 	if readLoops >= readLoopsLimit {
 		m.state.LogDebugf("Timed out — buffer: %d bytes\n%s", len(buffer), hex.Dump(buffer))
-		return nil, errors.New("MEMS 1.x timed out")
+		return errors.New("MEMS 1.x timed out")
 	}
 	m.state.LogDebug("Read loop exited normally")
 
-	return nil, nil
+	return nil
 }
 
 // parseData80 decodes the 0x80 data frame.
