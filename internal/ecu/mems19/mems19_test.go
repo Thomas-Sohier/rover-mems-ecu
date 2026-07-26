@@ -35,6 +35,11 @@ func TestHandleWakeUpHandshake_Success(t *testing.T) {
 		{"clean frame", []byte{0x55, 0x12, 0x80}, 0x80, 0x7F},
 		{"leading zeros skipped", []byte{0x00, 0x00, 0x55, 0x12, 0x80}, 0x80, 0x7F},
 		{"kw2 0x83 yields 0x7C", []byte{0x55, 0x12, 0x83}, 0x83, 0x7C},
+		// Framing errors from our own echoed 5-baud break do not always surface
+		// as 0x00; anything ahead of the sync byte must be skipped, not just
+		// zeros.
+		{"non-zero junk before sync", []byte{0xF8, 0xFE, 0x55, 0x12, 0x80}, 0x80, 0x7F},
+		{"junk and zeros mixed", []byte{0x00, 0xFE, 0x00, 0x55, 0x12, 0x83}, 0x83, 0x7C},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -68,15 +73,15 @@ func TestHandleWakeUpHandshake_ReadError(t *testing.T) {
 
 func TestWaitForChallengeEcho(t *testing.T) {
 	tests := []struct {
-		name     string
-		expected byte
-		read     []byte
-		wantErr  bool
+		name    string
+		read    []byte
+		wantErr bool
 	}{
-		{"with tx echo", 0x7F, []byte{0x7F, 0xE9}, false},
-		{"no tx echo", 0x7F, []byte{0xE9}, false},
-		{"leading zeros then echo", 0x7F, []byte{0x00, 0x00, 0xE9}, false},
-		{"wrong byte", 0x7F, []byte{0xAA}, true},
+		{"with tx echo", []byte{0x7F, 0xE9}, false},
+		{"no tx echo", []byte{0xE9}, false},
+		{"leading zeros then echo", []byte{0x00, 0x00, 0xE9}, false},
+		{"non-zero junk then echo", []byte{0xF8, 0x7F, 0xE9}, false},
+		{"wrong byte", []byte{0xAA}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -84,7 +89,7 @@ func TestWaitForChallengeEcho(t *testing.T) {
 			fake.Enqueue(tt.read...)
 
 			m := newHandler(fake)
-			err := m.waitForChallengeEcho(tt.expected)
+			err := m.waitForChallengeEcho()
 			if tt.wantErr && err == nil {
 				t.Fatal("expected error, got nil")
 			}
@@ -100,7 +105,7 @@ func TestWaitForChallengeEcho_ReadError(t *testing.T) {
 	fake := serialtest.NewFakePort().EnqueueErr(wantErr)
 
 	m := newHandler(fake)
-	if err := m.waitForChallengeEcho(0x7F); !errors.Is(err, wantErr) {
+	if err := m.waitForChallengeEcho(); !errors.Is(err, wantErr) {
 		t.Fatalf("got %v, want %v", err, wantErr)
 	}
 }
@@ -165,6 +170,27 @@ func TestConnect_BreakErrorClosesPort(t *testing.T) {
 	}
 	if !fake.Closed {
 		t.Error("port leaked after a failed wake-up")
+	}
+}
+
+func TestKeywordFrame(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []byte
+		want []byte
+	}{
+		{"exact frame", []byte{0x55, 0x12, 0x80}, []byte{0x12, 0x80}},
+		{"offset frame", []byte{0xF8, 0x00, 0x55, 0x12, 0x80}, []byte{0x12, 0x80}},
+		{"sync but frame incomplete", []byte{0x55, 0x12}, nil},
+		{"no sync byte", []byte{0x00, 0xF8, 0xFE}, nil},
+		{"empty", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := keywordFrame(tt.in); !slices.Equal(got, tt.want) {
+				t.Errorf("keywordFrame(%X) = %X, want %X", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 

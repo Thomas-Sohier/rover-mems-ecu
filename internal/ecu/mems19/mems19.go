@@ -1,6 +1,7 @@
 package mems19
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -119,25 +120,23 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 // that back tells the ECU we understood its keywords and unlocks the session
 // (there is no further authentication on 1.9).
 //
-// Leading 0x00 bytes are skipped because the line transition out of the break
-// condition can clock in spurious framing/zero bytes. The 0x7C default is a
-// fall-back for the common KW2=0x83 case (0x83 ^ 0xFF = 0x7C) if we never see a
-// clean 0x55 frame within the timeout.
+// The 0x7C default is a fall-back for the common KW2=0x83 case
+// (0x83 ^ 0xFF = 0x7C) if we never see a keyword frame within the timeout.
 func (m *MEMS19) handleWakeUpHandshake() error {
 	challengeResponse := byte(0x7C)
 
 	buf, ok, err := m.readUntil("handshake", 2*time.Second, func(b []byte) bool {
-		return len(b) >= 3 && b[0] == 0x55
+		return keywordFrame(b) != nil
 	})
 	if err != nil {
 		return err
 	}
 	if ok {
-		kw1, kw2 := buf[1], buf[2]
-		m.state.LogDebugf("1.9 ECU Woke Response received (55 %02X %02X)", kw1, kw2)
-		challengeResponse = kw2 ^ 0xFF
+		kw := keywordFrame(buf)
+		m.state.LogDebugf("1.9 ECU Woke Response received (55 %02X %02X)", kw[0], kw[1])
+		challengeResponse = kw[1] ^ 0xFF
 	} else {
-		m.state.LogDebug("1.9 ECU: no clean 0x55 frame within timeout; sending fallback challenge 0x7C (assumes KW2=0x83)")
+		m.state.LogDebug("1.9 ECU: no keyword frame within timeout; sending fallback challenge 0x7C (assumes KW2=0x83)")
 	}
 
 	sleep(25 * time.Millisecond)
@@ -147,7 +146,26 @@ func (m *MEMS19) handleWakeUpHandshake() error {
 		return err
 	}
 
-	return m.waitForChallengeEcho(challengeResponse)
+	return m.waitForChallengeEcho()
+}
+
+// keywordFrame returns [KW1, KW2] if b holds the ISO 9141-2 sync byte 0x55
+// followed by two further bytes, or nil if it does not (yet).
+//
+// The frame is searched for rather than expected at b[0]. On a single-wire
+// K-line our own bit-banged 5-baud address is echoed straight back at us, and
+// the UART sees those 200 ms line states as a run of framing errors. Which byte
+// value a driver reports for a framing error is not portable — 0x00 commonly,
+// but 0xF8/0xFE and other junk depending on adapter and driver. Anchoring the
+// match on b[0] meant a single non-zero junk byte masked the real handshake for
+// good and dropped us onto the blind 0x7C fallback.
+func keywordFrame(b []byte) []byte {
+	for i, v := range b {
+		if v == 0x55 && len(b) >= i+3 {
+			return b[i+1 : i+3]
+		}
+	}
+	return nil
 }
 
 // waitForChallengeEcho waits for the ECU to acknowledge the keyword handshake.
@@ -157,14 +175,14 @@ func (m *MEMS19) handleWakeUpHandshake() error {
 //
 // On a single-wire K-line the interface usually echoes everything we transmit,
 // so the bytes we read back are [our ~KW2 echo, 0xE9]. Some USB/K-line adapters
-// suppress the TX echo, in which case we only see [0xE9]. We accept either form
-// so the handshake works across both adapter types.
-func (m *MEMS19) waitForChallengeEcho(expectedEcho byte) error {
+// suppress the TX echo, in which case we only see [0xE9]. Rather than enumerate
+// those shapes we just look for 0xE9 anywhere in what came back, which covers
+// both adapter types and any leading line noise. A stray 0xE9 in that noise
+// would be a false positive, but the caller treats this handshake as
+// best-effort and proceeds either way, so it costs nothing.
+func (m *MEMS19) waitForChallengeEcho() error {
 	_, ok, err := m.readUntil("challenge-echo", 2*time.Second, func(b []byte) bool {
-		// With TX echo the line reads back [~KW2, 0xE9]; adapters that suppress
-		// the echo give just [0xE9]. Either confirms the link is up.
-		return (len(b) >= 2 && b[0] == expectedEcho && b[1] == 0xE9) ||
-			(len(b) >= 1 && b[0] == 0xE9)
+		return bytes.IndexByte(b, 0xE9) >= 0
 	})
 	if err != nil {
 		return err
