@@ -3,7 +3,6 @@ package mems2j
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"rover-mems-agent/internal/ecu"
 	"rover-mems-agent/pkg/utils"
@@ -34,7 +33,6 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 	if utils.SlicesEqual(actualData, wokeResponse) {
 		m.logDebug("< ECU woke up")
 		m.state.Connected = true
-		time.Sleep(50 * time.Millisecond)
 		return
 	}
 	if utils.SlicesEqual(actualData, startDiagResponse) {

@@ -243,6 +243,10 @@ func (m *MEMS2J) sendNextCommand(previousResponse []byte) {
 	}
 
 	if utils.SlicesEqual(previousResponse, wokeResponse) {
+		// Settle time after the wake-up before the ECU will accept the diagnostic
+		// session request. Kept here rather than in parseResponse, which runs with
+		// the State write lock held and so must not block.
+		time.Sleep(50 * time.Millisecond)
 		m.sendCommand(startDiagnostic)
 	} else if utils.SlicesEqual(previousResponse, startDiagResponse) {
 		m.sendCommand(requestSeed)
