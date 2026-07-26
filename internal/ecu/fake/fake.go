@@ -156,9 +156,9 @@ func (f *FakeECU) ReadData(ctx context.Context) error {
 			f.state.LogDebug("Fake ECU: received command: " + cmd)
 			if cmd == "clearfaults" {
 				f.state.Faults = []string{}
-				f.state.Alert = "ECU reports faults cleared"
+				f.state.SetAlertLocked("ECU reports faults cleared")
 			} else {
-				f.state.Alert = "Fake ECU accepted: " + cmd
+				f.state.SetAlertLocked("Fake ECU accepted: " + cmd)
 			}
 		}
 		f.state.Unlock()

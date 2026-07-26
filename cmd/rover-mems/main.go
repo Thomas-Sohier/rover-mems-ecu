@@ -167,9 +167,7 @@ func attemptConnection(ctx context.Context, state *ecu.State) bool {
 		return false
 	}
 	state.LogDebug(err.Error())
-	state.Lock()
-	state.Error = err.Error()
-	state.Unlock()
+	state.SetError(err.Error())
 	return true
 }
 

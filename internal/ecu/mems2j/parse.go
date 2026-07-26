@@ -61,13 +61,13 @@ func (m *MEMS2J) parseResponse(actualData []byte) {
 	}
 	if utils.SlicesEqual(actualData, faultsClearedResponse) {
 		m.logDebug("< FAULTS CLEARED")
-		m.state.Alert = "ECU reports faults cleared"
+		m.state.SetAlertLocked("ECU reports faults cleared")
 		return
 	}
 
 	if utils.SlicesEqual(actualData, responseLearnImmoCommand) {
 		m.logDebug("< IMMO CODE LEARN")
-		m.state.Alert = "ECU reports set to learn new immo code"
+		m.state.SetAlertLocked("ECU reports set to learn new immo code")
 		return
 	}
 

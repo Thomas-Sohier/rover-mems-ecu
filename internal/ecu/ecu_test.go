@@ -125,3 +125,77 @@ func TestLogLinesSince_FutureCursor(t *testing.T) {
 		t.Errorf("cursor = %d, want 1", cursor)
 	}
 }
+
+// TestAlertNotStolenByConcurrentReaders is the point of the sequence numbers:
+// /api and /ws both read the state, and the previous consume-on-read behaviour
+// meant whichever polled first cleared the notice before the other saw it.
+func TestAlertNotStolenByConcurrentReaders(t *testing.T) {
+	s := NewState()
+	s.SetAlert("ECU reports faults cleared")
+
+	first := s.Snapshot()
+	second := s.Snapshot()
+
+	if first.Alert != "ECU reports faults cleared" {
+		t.Errorf("first reader saw alert %q", first.Alert)
+	}
+	if second.Alert != first.Alert {
+		t.Errorf("second reader saw %q, want %q", second.Alert, first.Alert)
+	}
+	if second.AlertSeq != first.AlertSeq {
+		t.Errorf("AlertSeq differs between readers: %d vs %d", first.AlertSeq, second.AlertSeq)
+	}
+}
+
+func TestAlertSeqAdvancesPerNotice(t *testing.T) {
+	s := NewState()
+
+	if got := s.Snapshot().AlertSeq; got != 0 {
+		t.Fatalf("initial AlertSeq = %d, want 0", got)
+	}
+
+	s.SetAlert("first")
+	afterFirst := s.Snapshot().AlertSeq
+
+	// The same text raised again must still be distinguishable as a new notice.
+	s.SetAlert("first")
+	afterRepeat := s.Snapshot().AlertSeq
+
+	if afterFirst == 0 {
+		t.Error("AlertSeq did not advance on first alert")
+	}
+	if afterRepeat == afterFirst {
+		t.Error("AlertSeq did not advance when the same alert was raised again")
+	}
+}
+
+func TestSetErrorBumpsErrorSeq(t *testing.T) {
+	s := NewState()
+	s.SetError("boom")
+
+	snap := s.Snapshot()
+	if snap.Error != "boom" {
+		t.Errorf("Error = %q, want boom", snap.Error)
+	}
+	if snap.ErrorSeq == 0 {
+		t.Error("ErrorSeq not bumped")
+	}
+}
+
+// TestSetAlertLockedUnderWriteLock covers the variant ECU parsers use from
+// inside their own critical section.
+func TestSetAlertLockedUnderWriteLock(t *testing.T) {
+	s := NewState()
+
+	s.Lock()
+	s.SetAlertLocked("from inside the lock")
+	s.Unlock()
+
+	snap := s.Snapshot()
+	if snap.Alert != "from inside the lock" {
+		t.Errorf("Alert = %q", snap.Alert)
+	}
+	if snap.AlertSeq != 1 {
+		t.Errorf("AlertSeq = %d, want 1", snap.AlertSeq)
+	}
+}

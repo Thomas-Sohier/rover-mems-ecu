@@ -204,7 +204,7 @@ READLOOP:
 				if buffer[0] == userCommands[key] {
 					m.state.LogDebug("< " + key)
 					m.state.Lock()
-					m.state.Alert = "ECU accepted " + key
+					m.state.SetAlertLocked("ECU accepted " + key)
 					m.state.Unlock()
 					m.send(sp, m.nextCommand(buffer[0]))
 					buffer = nil
@@ -219,7 +219,7 @@ READLOOP:
 			if len(buffer) >= 2 && buffer[1] == 0x00 {
 				m.state.LogDebug("< FAULTS CLEARED")
 				m.state.Lock()
-				m.state.Alert = "ECU reports faults cleared"
+				m.state.SetAlertLocked("ECU reports faults cleared")
 				m.state.Unlock()
 				m.send(sp, m.nextCommand(buffer[0]))
 				buffer = nil

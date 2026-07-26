@@ -279,9 +279,7 @@ func (m *MEMS3) handleFrame(actualData []byte) (reply []byte, handled bool) {
 		return pongResponse, true
 
 	case slicesEqual(actualData, faultsClearedResponse):
-		m.state.Lock()
-		m.state.Alert = "ECU reports faults cleared"
-		m.state.Unlock()
+		m.state.SetAlert("ECU reports faults cleared")
 		m.state.LogDebug("< FAULTS CLEARED")
 		return faultsClearedResponse, true
 

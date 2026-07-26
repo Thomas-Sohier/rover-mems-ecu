@@ -262,9 +262,7 @@ func (r *RC5) ReadData(ctx context.Context) error {
 
 			if slicesEqual(buffer[0:3], faultsClearedResponse) {
 				r.state.LogDebug("< FAULT CODES CLEARED")
-				r.state.Lock()
-				r.state.Alert = "ECU reports faults cleared"
-				r.state.Unlock()
+				r.state.SetAlert("ECU reports faults cleared")
 				buffer = buffer[3:]
 				time.Sleep(200 * time.Millisecond)
 				r.sendNextCommand(faultsClearedResponse)

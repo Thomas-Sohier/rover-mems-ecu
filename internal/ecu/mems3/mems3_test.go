@@ -249,8 +249,12 @@ func TestHandleFrame_FaultsClearedRaisesAlert(t *testing.T) {
 	if _, ok := m.handleFrame(faultsClearedResponse); !ok {
 		t.Fatal("frame not handled")
 	}
-	if alert, _ := m.state.ConsumeAlertError(); alert == "" {
+	snap := m.state.Snapshot()
+	if snap.Alert == "" {
 		t.Error("expected a faults-cleared alert")
+	}
+	if snap.AlertSeq == 0 {
+		t.Error("AlertSeq not bumped")
 	}
 }
 

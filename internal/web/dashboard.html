@@ -630,18 +630,22 @@ function render(d) {
     stxt.textContent = 'DISCONNECTED';
   }
 
-  // Banners
+  // Banners. The server no longer clears a notice when it is read — that let
+  // whichever of /api and /ws polled first consume the other's notices. Each
+  // notice carries a sequence number instead, and we show it once per bump.
   const alertEl = document.getElementById('alert-banner');
   const errorEl = document.getElementById('error-banner');
-  if (d.alert) {
+  if (d.alert && d.alertSeq !== lastAlertSeq) {
+    lastAlertSeq = d.alertSeq;
     document.getElementById('alert-msg').textContent = d.alert;
     alertEl.style.display = 'flex';
     setTimeout(() => alertEl.style.display = 'none', 5000);
   }
-  if (d.error) {
+  if (d.error && d.errorSeq !== lastErrorSeq) {
+    lastErrorSeq = d.errorSeq;
     document.getElementById('error-msg').textContent = d.error;
     errorEl.style.display = 'flex';
-  } else {
+  } else if (!d.error) {
     errorEl.style.display = 'none';
   }
 
@@ -928,6 +932,11 @@ function toast(msg, ok) {
 buildActionGrids();
 
 // ── WebSocket ──────────────────────────────────────────────────
+// Sequence numbers of the last notice shown, so a notice that stays in the
+// server's state is not re-raised on every poll.
+let lastAlertSeq = 0;
+let lastErrorSeq = 0;
+
 let ws = null;
 let reconnectTimer = null;
 

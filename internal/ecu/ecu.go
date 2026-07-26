@@ -36,6 +36,13 @@ type State struct {
 	Error       string
 	UserCommand string
 
+	// alertSeq/errorSeq increment on each SetAlert/SetError. Consumers report a
+	// notice when the sequence changes rather than clearing the field, so that
+	// two concurrent readers (the /api poll and the /ws stream) cannot steal
+	// each other's notices.
+	alertSeq int64
+	errorSeq int64
+
 	// Runtime configuration (can be changed via web UI)
 	EcuType            string
 	SelectedSerialPort string
@@ -137,7 +144,9 @@ type Snapshot struct {
 	Faults             []string
 	Data               map[string]float32
 	Alert              string
+	AlertSeq           int64
 	Error              string
+	ErrorSeq           int64
 	UserCommand        string
 	EcuType            string
 	SelectedSerialPort string
@@ -146,7 +155,7 @@ type Snapshot struct {
 }
 
 // Snapshot returns a consistent, copied view of the State under the read lock.
-// It does not mutate the State (in particular it does not consume Alert/Error).
+// It does not mutate the State.
 // Debug log lines are deliberately excluded: they are the largest field by far
 // and only the WebSocket stream wants them, via LogLinesSince.
 func (s *State) Snapshot() Snapshot {
@@ -157,7 +166,9 @@ func (s *State) Snapshot() Snapshot {
 		Faults:             slices.Clone(s.Faults),
 		Data:               maps.Clone(s.Data),
 		Alert:              s.Alert,
+		AlertSeq:           s.alertSeq,
 		Error:              s.Error,
+		ErrorSeq:           s.errorSeq,
 		UserCommand:        s.UserCommand,
 		EcuType:            s.EcuType,
 		SelectedSerialPort: s.SelectedSerialPort,
@@ -182,16 +193,26 @@ func (s *State) FaultsCopy() []string {
 	return slices.Clone(s.Faults)
 }
 
-// ConsumeAlertError reads and clears the Alert and Error fields, returning their
-// previous values. Alerts and errors are one-shot: they are reported once to the
-// consumer and consuming them clears them so they are not reported again.
-func (s *State) ConsumeAlertError() (alert, errMsg string) {
+// SetAlert records a one-shot alert for the UI, bumping its sequence number so
+// consumers can tell a repeat of the same text from a fresh occurrence.
+func (s *State) SetAlert(v string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	alert, errMsg = s.Alert, s.Error
-	s.Alert = ""
-	s.Error = ""
-	return alert, errMsg
+	s.SetAlertLocked(v)
+}
+
+// SetAlertLocked is SetAlert for callers that already hold the write lock.
+func (s *State) SetAlertLocked(v string) {
+	s.Alert = v
+	s.alertSeq++
+}
+
+// SetError records an error for the UI, bumping its sequence number.
+func (s *State) SetError(v string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Error = v
+	s.errorSeq++
 }
 
 // SetEcuType sets the selected ECU type.

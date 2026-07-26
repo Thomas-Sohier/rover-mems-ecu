@@ -194,14 +194,15 @@ func (s *Server) Run(ctx context.Context, addr string) {
 
 func (s *Server) apiStateHandler(c *gin.Context) {
 	snap := s.state.Snapshot()
-	alert, errMsg := s.state.ConsumeAlertError()
 	jsonData, err := json.Marshal(gin.H{
 		"faults":       snap.Faults,
 		"connected":    snap.Connected,
 		"ecuType":      snap.EcuType,
 		"userCommand":  snap.UserCommand,
-		"alert":        alert,
-		"error":        errMsg,
+		"alert":        snap.Alert,
+		"alertSeq":     snap.AlertSeq,
+		"error":        snap.Error,
+		"errorSeq":     snap.ErrorSeq,
 		"ecuData":      snap.Data,
 		"agentVersion": snap.AgentVersion,
 	})
@@ -265,15 +266,16 @@ func (s *Server) wsIteration(conn *websocket.Conn, logCursor int64) (int64, erro
 	}
 
 	snap := s.state.Snapshot()
-	alert, errMsg := s.state.ConsumeAlertError()
 	logLines, nextCursor := s.state.LogLinesSince(logCursor)
 	payload := map[string]any{
 		"faults":             snap.Faults,
 		"connected":          snap.Connected,
 		"ecuType":            snap.EcuType,
 		"userCommand":        snap.UserCommand,
-		"alert":              alert,
-		"error":              errMsg,
+		"alert":              snap.Alert,
+		"alertSeq":           snap.AlertSeq,
+		"error":              snap.Error,
+		"errorSeq":           snap.ErrorSeq,
 		"ecuData":            snap.Data,
 		"agentVersion":       snap.AgentVersion,
 		"timestamp":          time.Now().Format(time.RFC3339),
