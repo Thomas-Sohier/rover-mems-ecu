@@ -289,6 +289,32 @@ READLOOP:
 	return nil
 }
 
+// faultBits80 is the DTC bitfield layout of the 0x80 frame: offsets 0x0D and
+// 0x0E (after the command echo is dropped), one named fault per set bit. Listed
+// as data so the layout can be read off against the protocol documentation
+// rather than inferred from a column of near-identical if statements. Bit 2 of
+// each byte and bit 7 of 0x0D are unassigned.
+var faultBits80 = []struct {
+	offset int
+	bit    uint
+	name   string
+}{
+	{0x0D, 0, "fault_coolant_temp_sensor"},
+	{0x0D, 1, "fault_inlet_air_temp_sensor"},
+	{0x0D, 3, "fault_turbo_overboost"},
+	{0x0D, 4, "fault_ambient_temp_sensor"},
+	{0x0D, 5, "fault_fuel_rail_temp_sensor"},
+	{0x0D, 6, "fault_knock_detected"},
+
+	{0x0E, 0, "fault_coolant_temp_gauge"},
+	{0x0E, 1, "fault_fuel_pump_circuit"},
+	{0x0E, 3, "fault_air_con_clutch"},
+	{0x0E, 4, "fault_purge_valve"},
+	{0x0E, 5, "fault_map_sensor"},
+	{0x0E, 6, "fault_boost_valve"},
+	{0x0E, 7, "fault_throttle_pot_circuit"},
+}
+
 // parseData80 decodes the 0x80 data frame.
 //
 // Layout and scaling come from the rovermems technical page
@@ -350,45 +376,10 @@ func (m *MEMS1x) parseData80(data []byte) {
 	m.state.Data["idle_switch"] = float32((int(data[10]) & 0x10) >> 4)
 	m.state.Data["park_or_neutral_switch"] = float32(data[12])
 
-	if ((int(data[13]) >> 0) & 1) > 0 {
-		faults = append(faults, "fault_coolant_temp_sensor")
-	}
-	if ((int(data[13]) >> 1) & 1) > 0 {
-		faults = append(faults, "fault_inlet_air_temp_sensor")
-	}
-	if ((int(data[13]) >> 3) & 1) > 0 {
-		faults = append(faults, "fault_turbo_overboost")
-	}
-	if ((int(data[13]) >> 4) & 1) > 0 {
-		faults = append(faults, "fault_ambient_temp_sensor")
-	}
-	if ((int(data[13]) >> 5) & 1) > 0 {
-		faults = append(faults, "fault_fuel_rail_temp_sensor")
-	}
-	if ((int(data[13]) >> 6) & 1) > 0 {
-		faults = append(faults, "fault_knock_detected")
-	}
-
-	if ((int(data[14]) >> 0) & 1) > 0 {
-		faults = append(faults, "fault_coolant_temp_gauge")
-	}
-	if ((int(data[14]) >> 1) & 1) > 0 {
-		faults = append(faults, "fault_fuel_pump_circuit")
-	}
-	if ((int(data[14]) >> 3) & 1) > 0 {
-		faults = append(faults, "fault_air_con_clutch")
-	}
-	if ((int(data[14]) >> 4) & 1) > 0 {
-		faults = append(faults, "fault_purge_valve")
-	}
-	if ((int(data[14]) >> 5) & 1) > 0 {
-		faults = append(faults, "fault_map_sensor")
-	}
-	if ((int(data[14]) >> 6) & 1) > 0 {
-		faults = append(faults, "fault_boost_valve")
-	}
-	if ((int(data[14]) >> 7) & 1) > 0 {
-		faults = append(faults, "fault_throttle_pot_circuit")
+	for _, f := range faultBits80 {
+		if data[f.offset]&(1<<f.bit) != 0 {
+			faults = append(faults, f.name)
+		}
 	}
 
 	if packetSize > 15 {

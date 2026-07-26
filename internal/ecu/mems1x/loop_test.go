@@ -321,3 +321,55 @@ func TestParseDataInDebugMode(t *testing.T) {
 		m.parseData7D([]byte{0x7D, 0x04, 0, 0, 0})
 	})
 }
+
+// TestParseData80_AllFaultBits walks every entry of faultBits80, checking each
+// bit raises its own fault and nothing else. The previous column of if
+// statements was only covered for the knock bit.
+func TestParseData80_AllFaultBits(t *testing.T) {
+	for _, f := range faultBits80 {
+		t.Run(f.name, func(t *testing.T) {
+			m := makeHandler()
+			frame := build80(0x1C)
+			// data[n] lives at raw[n+1] once the command echo is dropped.
+			frame[f.offset+1] = 1 << f.bit
+
+			m.parseData80(frame)
+
+			if !slices.Contains(m.state.Faults, f.name) {
+				t.Errorf("bit %d of offset %#x: %q missing from %v", f.bit, f.offset, f.name, m.state.Faults)
+			}
+			if len(m.state.Faults) != 1 {
+				t.Errorf("expected exactly one fault, got %v", m.state.Faults)
+			}
+		})
+	}
+}
+
+// TestParseData80_NoFaultBitsSet checks a clean frame reports nothing.
+func TestParseData80_NoFaultBitsSet(t *testing.T) {
+	m := makeHandler()
+
+	m.parseData80(build80(0x1C))
+
+	if len(m.state.Faults) != 0 {
+		t.Errorf("clean frame reported faults: %v", m.state.Faults)
+	}
+}
+
+// TestFaultBits80NoDuplicates guards against a copy-paste slip in the table.
+func TestFaultBits80NoDuplicates(t *testing.T) {
+	seen := map[string]bool{}
+	positions := map[[2]int]bool{}
+	for _, f := range faultBits80 {
+		if seen[f.name] {
+			t.Errorf("duplicate fault name %q", f.name)
+		}
+		seen[f.name] = true
+
+		pos := [2]int{f.offset, int(f.bit)}
+		if positions[pos] {
+			t.Errorf("duplicate position offset %#x bit %d", f.offset, f.bit)
+		}
+		positions[pos] = true
+	}
+}
