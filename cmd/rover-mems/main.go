@@ -94,7 +94,30 @@ func initializeAgent(state *ecu.State) {
 	state.LogDebug("Selected ECU type: " + state.EcuType)
 }
 
+const (
+	// minRetryDelay is the wait after a connection attempt that reached the ECU,
+	// and the starting point for the backoff.
+	minRetryDelay = 1 * time.Second
+	// maxRetryDelay caps the backoff. With no adapter plugged in the agent would
+	// otherwise re-enumerate the serial ports once a second forever.
+	maxRetryDelay = 30 * time.Second
+)
+
+// nextRetryDelay doubles the delay after a failed attempt, up to maxRetryDelay,
+// and resets to minRetryDelay after one that succeeded.
+func nextRetryDelay(current time.Duration, failed bool) time.Duration {
+	if !failed {
+		return minRetryDelay
+	}
+	next := current * 2
+	if next > maxRetryDelay {
+		return maxRetryDelay
+	}
+	return next
+}
+
 func runEventLoop(ctx context.Context, state *ecu.State) {
+	delay := minRetryDelay
 	for {
 		select {
 		case <-ctx.Done():
@@ -103,25 +126,34 @@ func runEventLoop(ctx context.Context, state *ecu.State) {
 		default:
 		}
 
-		attemptConnection(ctx, state)
+		failed := attemptConnection(ctx, state)
+		delay = nextRetryDelay(delay, failed)
 
 		select {
 		case <-ctx.Done():
 			state.LogDebug("Shutting down...")
 			return
-		case <-time.After(1 * time.Second):
+		case <-time.After(delay):
 		}
 	}
 }
 
-func attemptConnection(ctx context.Context, state *ecu.State) {
+// attemptConnection runs one connection attempt, reporting whether it failed.
+func attemptConnection(ctx context.Context, state *ecu.State) bool {
 	err := connectLoop(ctx, state)
-	if err != nil {
-		state.LogDebug(err.Error())
-		state.Lock()
-		state.Error = err.Error()
-		state.Unlock()
+	if err == nil {
+		return false
 	}
+	// A cancelled context is a shutdown, not a connection failure; do not let it
+	// inflate the backoff or surface as an error to the dashboard.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	state.LogDebug(err.Error())
+	state.Lock()
+	state.Error = err.Error()
+	state.Unlock()
+	return true
 }
 
 func connectLoop(ctx context.Context, state *ecu.State) error {

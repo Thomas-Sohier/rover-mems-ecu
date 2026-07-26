@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"rover-mems-agent/internal/ecu"
 )
@@ -107,5 +108,57 @@ func TestConnectLoop_FakeEcu(t *testing.T) {
 	err := connectLoop(ctx, state)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
+	}
+}
+
+func TestNextRetryDelay(t *testing.T) {
+	tests := []struct {
+		name    string
+		current time.Duration
+		failed  bool
+		want    time.Duration
+	}{
+		{"success resets", 16 * time.Second, false, minRetryDelay},
+		{"first failure doubles", minRetryDelay, true, 2 * time.Second},
+		{"keeps doubling", 4 * time.Second, true, 8 * time.Second},
+		{"clamps at max", 20 * time.Second, true, maxRetryDelay},
+		{"stays at max", maxRetryDelay, true, maxRetryDelay},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nextRetryDelay(tc.current, tc.failed); got != tc.want {
+				t.Errorf("nextRetryDelay(%v, %v) = %v, want %v", tc.current, tc.failed, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNextRetryDelayConvergesToMax checks repeated failures reach the cap and
+// stop there, rather than overflowing or oscillating.
+func TestNextRetryDelayConvergesToMax(t *testing.T) {
+	d := minRetryDelay
+	for i := 0; i < 50; i++ {
+		d = nextRetryDelay(d, true)
+	}
+	if d != maxRetryDelay {
+		t.Errorf("after 50 failures delay = %v, want %v", d, maxRetryDelay)
+	}
+}
+
+// TestAttemptConnectionIgnoresCancellation checks a shutdown is not recorded as
+// a connection error, which would both inflate the backoff and leave a bogus
+// message on the dashboard.
+func TestAttemptConnectionIgnoresCancellation(t *testing.T) {
+	state := ecu.NewState()
+	state.EcuType = "fake"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if failed := attemptConnection(ctx, state); failed {
+		t.Error("attemptConnection reported failure for a cancelled context")
+	}
+	if got := state.Snapshot().Error; got != "" {
+		t.Errorf("state.Error = %q, want empty", got)
 	}
 }
