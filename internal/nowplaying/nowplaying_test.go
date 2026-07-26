@@ -286,3 +286,80 @@ func TestSubscribe_FullBuffer_DoesNotBlock(t *testing.T) {
 		t.Fatal("HandleMetadata blocked on full subscriber channel")
 	}
 }
+
+// --- Art transfer bounds ---
+
+func TestStore_ArtControl_RejectsOutOfRange(t *testing.T) {
+	tests := []struct {
+		name       string
+		totalBytes int
+		chunkCount int
+	}{
+		{"zero bytes", 0, 1},
+		{"negative bytes", -1, 1},
+		{"bytes over cap", MaxArtBytes + 1, 1},
+		{"zero chunks", 16, 0},
+		{"negative chunks", 16, -3},
+		{"chunks over cap", 16, MaxArtChunks + 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewStore()
+			if err := s.HandleArtControl(artControl("id", tc.totalBytes, tc.chunkCount)); err == nil {
+				t.Fatal("expected error")
+			}
+			// A rejected announcement must not arm a transfer.
+			if err := s.HandleArtChunk(makeChunk(0, []byte("x"))); err == nil {
+				t.Fatal("expected no transfer in progress")
+			}
+		})
+	}
+}
+
+func TestStore_ArtControl_AcceptsAtCap(t *testing.T) {
+	s := NewStore()
+	if err := s.HandleArtControl(artControl("id", MaxArtBytes, MaxArtChunks)); err != nil {
+		t.Fatalf("boundary value rejected: %v", err)
+	}
+}
+
+func TestStore_ArtChunk_RejectsIndexBeyondChunkCount(t *testing.T) {
+	s := NewStore()
+	if err := s.HandleArtControl(artControl("id", 8, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HandleArtChunk(makeChunk(2, []byte("AAAA"))); err == nil {
+		t.Fatal("expected error for index >= chunk_count")
+	}
+	// The transfer stays usable for valid indices.
+	if err := s.HandleArtChunk(makeChunk(0, []byte("AAAA"))); err != nil {
+		t.Fatalf("valid chunk rejected: %v", err)
+	}
+}
+
+func TestStore_ArtTransfer_Expires(t *testing.T) {
+	base := time.Now()
+	current := base
+	now = func() time.Time { return current }
+	t.Cleanup(func() { now = time.Now })
+
+	s := NewStore()
+	if err := s.HandleArtControl(artControl("id", 8, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HandleArtChunk(makeChunk(0, []byte("AAAA"))); err != nil {
+		t.Fatal(err)
+	}
+
+	current = base.Add(artTransferTTL + time.Second)
+	if err := s.HandleArtChunk(makeChunk(1, []byte("BBBB"))); err == nil {
+		t.Fatal("expected expired transfer error")
+	}
+	// The expired transfer is dropped, not left half-populated.
+	if err := s.HandleArtChunk(makeChunk(1, []byte("BBBB"))); err == nil {
+		t.Fatal("expected no transfer in progress after expiry")
+	}
+	if _, _, ok := s.Art(); ok {
+		t.Fatal("expired transfer must not publish art")
+	}
+}

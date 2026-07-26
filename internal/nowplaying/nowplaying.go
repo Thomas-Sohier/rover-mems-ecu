@@ -6,7 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
+
+// now is time.Now indirected through a package variable so tests can drive the
+// art-transfer TTL without sleeping.
+var now = time.Now
 
 // Metadata is the decoded form of the phone's metadata JSON write.
 type Metadata struct {
@@ -51,6 +56,21 @@ func ParseMetadata(data []byte) (Metadata, error) {
 	return m, nil
 }
 
+const (
+	// MaxArtBytes caps a single cover-art transfer. The art-control payload is
+	// written by an unauthenticated BLE peer, so total_bytes is untrusted input
+	// that would otherwise size an unbounded allocation.
+	MaxArtBytes = 512 << 10
+
+	// MaxArtChunks caps the chunk map for the same reason.
+	MaxArtChunks = 4096
+
+	// artTransferTTL is how long a partial transfer is kept before a further
+	// chunk is rejected. Without it an abandoned transfer pins its buffered
+	// chunks until the phone happens to start a new one.
+	artTransferTTL = 30 * time.Second
+)
+
 // artTransfer tracks an in-progress chunked art upload.
 type artTransfer struct {
 	artID      string
@@ -58,6 +78,7 @@ type artTransfer struct {
 	chunkCount int
 	chunks     map[int][]byte
 	received   int
+	startedAt  time.Time
 }
 
 // ParseArtControl decodes an art-control characteristic write payload.
@@ -115,11 +136,20 @@ func (s *Store) HandleMetadata(data []byte) error {
 	return nil
 }
 
-// HandleArtControl starts a new art transfer, discarding any previous partial one.
+// HandleArtControl starts a new art transfer, discarding any previous partial
+// one. Transfers declaring more than MaxArtBytes or MaxArtChunks are rejected
+// outright so a malformed or hostile announcement cannot drive an unbounded
+// allocation.
 func (s *Store) HandleArtControl(data []byte) error {
 	artID, totalBytes, chunkCount, err := ParseArtControl(data)
 	if err != nil {
 		return err
+	}
+	if totalBytes <= 0 || totalBytes > MaxArtBytes {
+		return fmt.Errorf("nowplaying: art total_bytes %d out of range (1..%d)", totalBytes, MaxArtBytes)
+	}
+	if chunkCount <= 0 || chunkCount > MaxArtChunks {
+		return fmt.Errorf("nowplaying: art chunk_count %d out of range (1..%d)", chunkCount, MaxArtChunks)
 	}
 	s.mu.Lock()
 	s.transfer = &artTransfer{
@@ -127,6 +157,7 @@ func (s *Store) HandleArtControl(data []byte) error {
 		totalBytes: totalBytes,
 		chunkCount: chunkCount,
 		chunks:     make(map[int][]byte),
+		startedAt:  now(),
 	}
 	s.mu.Unlock()
 	return nil
@@ -153,6 +184,17 @@ func (s *Store) HandleArtChunk(data []byte) error {
 		return errors.New("nowplaying: no art transfer in progress")
 	}
 	t := s.transfer
+
+	if now().Sub(t.startedAt) > artTransferTTL {
+		s.transfer = nil
+		s.mu.Unlock()
+		return errors.New("nowplaying: art transfer expired")
+	}
+
+	if idx >= t.chunkCount {
+		s.mu.Unlock()
+		return fmt.Errorf("nowplaying: art chunk index %d beyond chunk_count %d", idx, t.chunkCount)
+	}
 
 	// Duplicate: subtract old length before overwriting.
 	if prev, dup := t.chunks[idx]; dup {
