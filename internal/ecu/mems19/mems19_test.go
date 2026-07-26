@@ -110,7 +110,9 @@ func TestSend5BaudWakeup_BreakSequence(t *testing.T) {
 	fake := serialtest.NewFakePort()
 	m := newHandler(fake)
 
-	m.send5BaudWakeup()
+	if err := m.send5BaudWakeup(); err != nil {
+		t.Fatalf("send5BaudWakeup: %v", err)
+	}
 
 	// Address 0x16 = 0b00010110, sent LSB-first, framed by a start bit (logic 0)
 	// and a stop bit (logic 1). Bit pattern (with framing):
@@ -125,6 +127,44 @@ func TestSend5BaudWakeup_BreakSequence(t *testing.T) {
 	}
 	if !slices.Equal(fake.Breaks, want) {
 		t.Errorf("break sequence:\n got %v\nwant %v", fake.Breaks, want)
+	}
+}
+
+// TestSend5BaudWakeup_BreakError covers the adapter whose driver has no
+// break_ctl: the wake-up cannot happen at all, so it must be reported rather
+// than left to surface as an unexplained handshake timeout two seconds later.
+func TestSend5BaudWakeup_BreakError(t *testing.T) {
+	noSleep(t)
+	wantErr := errors.New("inappropriate ioctl for device")
+	fake := serialtest.NewFakePort().SetBreakErr(wantErr)
+	m := newHandler(fake)
+
+	err := m.send5BaudWakeup()
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("got %v, want wrapped %v", err, wantErr)
+	}
+	if len(fake.Breaks) != 1 {
+		t.Errorf("should abort on the first failing break, got %d breaks", len(fake.Breaks))
+	}
+}
+
+// TestConnect_BreakErrorClosesPort checks the failing wake-up does not leak the
+// port it opened.
+func TestConnect_BreakErrorClosesPort(t *testing.T) {
+	noSleep(t)
+	fake := serialtest.NewFakePort().SetBreakErr(errors.New("no break_ctl"))
+	fake.EnqueueErr(serialtest.NewTimeoutError())
+
+	orig := openPort
+	openPort = func(string, int, serial.Parity) (serial.Port, error) { return fake, nil }
+	t.Cleanup(func() { openPort = orig })
+
+	m, _ := NewMEMS19(ecu.NewState(), ecu.Config{})
+	if err := m.Connect(context.Background(), "/dev/fake"); err == nil {
+		t.Fatal("Connect should fail when the wake-up break fails")
+	}
+	if !fake.Closed {
+		t.Error("port leaked after a failed wake-up")
 	}
 }
 

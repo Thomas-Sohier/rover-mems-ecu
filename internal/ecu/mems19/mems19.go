@@ -79,7 +79,10 @@ func (m *MEMS19) Connect(_ context.Context, portName string) error {
 	m.flushInput()
 
 	m.state.LogDebug("1.9 sending 5-baud slow-init wake-up (address 0x16)")
-	m.send5BaudWakeup()
+	if err := m.send5BaudWakeup(); err != nil {
+		sp.Close()
+		return err
+	}
 	m.state.LogDebug("1.9 5-baud wake-up sent, starting keyword handshake")
 
 	// The handshake is best-effort : initEcu discards
@@ -240,7 +243,13 @@ func (m *MEMS19) flushInput() {
 //
 // 0x16 is the published diagnostic address for the 1.9 ECU; sending it at this
 // rate is what makes the ECU start the keyword handshake handled above.
-func (m *MEMS19) send5BaudWakeup() {
+//
+// A failing Break aborts the whole Connect. Port.Break is TIOCSBRK/TIOCCBRK on
+// Linux, so it fails outright on a USB adapter whose driver has no break_ctl —
+// and with no break there is no wake-up at all, so every byte read afterwards
+// is noise. Reporting that is the difference between "your adapter cannot do
+// this" and an unexplained handshake timeout two seconds later.
+func (m *MEMS19) send5BaudWakeup() error {
 	const bitTime = 200 * time.Millisecond
 	const ecuAddress = 0x16
 
@@ -261,12 +270,16 @@ func (m *MEMS19) send5BaudWakeup() {
 		}
 		d := time.Duration(j-i) * bitTime
 		if frame[i] == 0 {
-			m.sp.Break(d) // hold the line low for the whole run
+			// hold the line low for the whole run
+			if err := m.sp.Break(d); err != nil {
+				return fmt.Errorf("5-baud wake-up: break for %v at bit %d: %w", d, i, err)
+			}
 		} else {
 			sleep(d) // line idles high
 		}
 		i = j
 	}
+	return nil
 }
 
 func (m *MEMS19) Type() string {

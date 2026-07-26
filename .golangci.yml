@@ -19,12 +19,3 @@ linters-settings:
     # Flag only clear mistakes outside of those patterns.
     check-type-assertions: true
     check-blank: false
-
-issues:
-  exclude-rules:
-    # The 5-baud slow-init bit-bangs the line one bit at a time; a Break error
-    # mid-frame cannot be recovered from and the handshake that follows reports
-    # the failure. Every other Break/Read/Write call site checks its error.
-    - path: internal/ecu/mems19/mems19\.go
-      linters: [errcheck]
-      text: "sp\\.Break"

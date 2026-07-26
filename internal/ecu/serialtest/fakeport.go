@@ -35,6 +35,9 @@ type FakePort struct {
 	// logic-0 (line-low) segment of a wake-up waveform; logic-1 segments produce
 	// no Break call.
 	Breaks []time.Duration
+	// breakErr, when set, is returned by every Break call, mimicking a USB
+	// adapter whose driver does not implement break_ctl.
+	breakErr error
 	// Closed reports whether Close has been called.
 	Closed bool
 }
@@ -99,11 +102,18 @@ func (p *FakePort) Close() error {
 	return nil
 }
 
+// SetBreakErr makes every subsequent Break return err, as a driver with no
+// break_ctl support does.
+func (p *FakePort) SetBreakErr(err error) *FakePort {
+	p.breakErr = err
+	return p
+}
+
 // Break records the duration of the break pulse and returns immediately (unlike
 // a real port, it does not actually block for the duration).
 func (p *FakePort) Break(d time.Duration) error {
 	p.Breaks = append(p.Breaks, d)
-	return nil
+	return p.breakErr
 }
 
 // SetReadTimeout is a no-op that satisfies the interface.
