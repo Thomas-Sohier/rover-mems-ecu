@@ -22,21 +22,9 @@ linters-settings:
 
 issues:
   exclude-rules:
-    # Ignored serial read errors in the K-line loop are intentional.
-    - path: internal/ecu/mems1x/loop\.go
-      linters: [errcheck]
-      text: "sp\\.Read"
-    - path: internal/ecu/mems1x/loop\.go
-      linters: [errcheck]
-      text: "sp\\.Write"
-    # K-line break/timing control errors are intentionally dropped during the
-    # wake-up sequences; they are timing-driven and not recoverable mid-pulse.
-    - path: internal/ecu/rc5/rc5\.go
-      linters: [errcheck]
-      text: "sp\\.Break"
-    - path: internal/ecu/mems2j/mems2j\.go
-      linters: [errcheck]
-      text: "sp\\.(Break|Write)"
+    # The 5-baud slow-init bit-bangs the line one bit at a time; a Break error
+    # mid-frame cannot be recovered from and the handshake that follows reports
+    # the failure. Every other Break/Read/Write call site checks its error.
     - path: internal/ecu/mems19/mems19\.go
       linters: [errcheck]
       text: "sp\\.Break"
