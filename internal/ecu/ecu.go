@@ -10,9 +10,19 @@ import (
 	"sync"
 )
 
+// maxLogLines is the number of debug lines retained in the ring of LogLines.
+const maxLogLines = 100
+
 // State holds all runtime ECU data shared between ECU handlers and the web server.
 type State struct {
+	// mu guards the ECU data fields below. It is deliberately NOT the mutex that
+	// guards LogLines: ECU parsers log while holding mu, and sync.RWMutex is not
+	// reentrant, so sharing one mutex would self-deadlock every debug-mode run.
 	mu sync.RWMutex
+
+	// logMu guards LogLines only. Lock ordering is mu -> logMu (Snapshot takes
+	// both); nothing ever takes mu while holding logMu.
+	logMu sync.Mutex
 
 	// ECU connection state
 	Connected   bool
@@ -47,33 +57,39 @@ func NewState() *State {
 }
 
 // LogDebug appends a debug message to LogLines if DebugMode is enabled.
+// It is safe to call while holding the State lock.
 func (s *State) LogDebug(args ...any) {
 	if !s.DebugMode {
 		return
 	}
-	msg := fmt.Sprint(args...)
-	fmt.Println(msg)
-	s.mu.Lock()
-	s.LogLines = append(s.LogLines, msg)
-	if len(s.LogLines) > 100 {
-		s.LogLines = s.LogLines[len(s.LogLines)-100:]
-	}
-	s.mu.Unlock()
+	s.appendLog(fmt.Sprint(args...))
 }
 
 // LogDebugf appends a formatted debug message.
+// It is safe to call while holding the State lock.
 func (s *State) LogDebugf(format string, args ...any) {
 	if !s.DebugMode {
 		return
 	}
-	msg := fmt.Sprintf(format, args...)
+	s.appendLog(fmt.Sprintf(format, args...))
+}
+
+// appendLog prints msg and pushes it onto the bounded LogLines ring.
+func (s *State) appendLog(msg string) {
 	fmt.Println(msg)
-	s.mu.Lock()
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
 	s.LogLines = append(s.LogLines, msg)
-	if len(s.LogLines) > 100 {
-		s.LogLines = s.LogLines[len(s.LogLines)-100:]
+	if len(s.LogLines) > maxLogLines {
+		s.LogLines = s.LogLines[len(s.LogLines)-maxLogLines:]
 	}
-	s.mu.Unlock()
+}
+
+// LogLinesCopy returns a copy of the retained debug lines.
+func (s *State) LogLinesCopy() []string {
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+	return slices.Clone(s.LogLines)
 }
 
 // Lock acquires the write lock.
@@ -117,7 +133,7 @@ func (s *State) Snapshot() Snapshot {
 		SelectedSerialPort: s.SelectedSerialPort,
 		SerialPorts:        slices.Clone(s.SerialPorts),
 		AgentVersion:       s.AgentVersion,
-		LogLines:           slices.Clone(s.LogLines),
+		LogLines:           s.LogLinesCopy(),
 	}
 }
 

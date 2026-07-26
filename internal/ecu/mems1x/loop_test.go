@@ -279,3 +279,45 @@ func TestParseData7D_ClosedLoop(t *testing.T) {
 		})
 	}
 }
+
+// TestParseDataInDebugMode exercises both frame parsers with DebugMode enabled.
+// The parsers log while holding the State write lock, so a regression that puts
+// LogLines back under the data mutex hangs this test instead of failing it.
+func TestParseDataInDebugMode(t *testing.T) {
+	t.Run("0x80", func(t *testing.T) {
+		m := makeHandler()
+		m.state.DebugMode = true
+		frame := build80(0x1C)
+		// data[1..2] → raw[2..3]
+		frame[2] = 0x0F
+		frame[3] = 0xA0
+
+		m.parseData80(frame)
+
+		if got := m.state.Data["rpm"]; !approx(got, 4000) {
+			t.Errorf("rpm = %v, want 4000", got)
+		}
+	})
+
+	t.Run("0x7D", func(t *testing.T) {
+		m := makeHandler()
+		m.state.DebugMode = true
+		frame := build7D(0x1C)
+		// data[2] → raw[3]
+		frame[3] = 90
+
+		m.parseData7D(frame)
+
+		if got := m.state.Data["throttle_angle"]; !approx(got, 45) {
+			t.Errorf("throttle_angle = %v, want 45", got)
+		}
+	})
+
+	t.Run("short frame", func(t *testing.T) {
+		m := makeHandler()
+		m.state.DebugMode = true
+		// Short frames take the early-return path, which also logs under the lock.
+		m.parseData80([]byte{0x80, 0x04, 0, 0, 0})
+		m.parseData7D([]byte{0x7D, 0x04, 0, 0, 0})
+	})
+}
