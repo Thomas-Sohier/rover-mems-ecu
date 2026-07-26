@@ -90,11 +90,11 @@ func (s *Server) buildRouter(ctx context.Context) http.Handler {
 	})
 
 	router.GET("/connected", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"connected": s.state.Snapshot().Connected})
+		c.JSON(http.StatusOK, gin.H{"connected": s.state.IsConnected()})
 	})
 
 	router.GET("/faults", func(c *gin.Context) {
-		jsonData, err := json.Marshal(gin.H{"faults": s.state.Snapshot().Faults})
+		jsonData, err := json.Marshal(gin.H{"faults": s.state.FaultsCopy()})
 		if err != nil {
 			c.AbortWithStatus(http.StatusInternalServerError)
 			return
@@ -235,30 +235,38 @@ func (s *Server) wsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	conn.SetReadLimit(2048)
+	// logCursor tracks which debug lines this connection has already been sent,
+	// so each poll ships only what is new rather than the whole ring.
+	var logCursor int64
 	for {
-		if err := s.wsIteration(conn); err != nil {
+		next, err := s.wsIteration(conn, logCursor)
+		if err != nil {
 			break
 		}
+		logCursor = next
 	}
 }
 
-func (s *Server) wsIteration(conn *websocket.Conn) error {
+// wsIteration serves one browser poll. It returns the log cursor to use on the
+// next iteration.
+func (s *Server) wsIteration(conn *websocket.Conn, logCursor int64) (int64, error) {
 	if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
-		return err
+		return logCursor, err
 	}
 
 	_, message, err := conn.ReadMessage()
 	if err != nil {
-		return err
+		return logCursor, err
 	}
 
 	if strings.TrimSpace(string(message)) != "." {
 		s.state.LogDebugf("ws: ignoring unexpected message: %s", message)
-		return nil
+		return logCursor, nil
 	}
 
 	snap := s.state.Snapshot()
 	alert, errMsg := s.state.ConsumeAlertError()
+	logLines, nextCursor := s.state.LogLinesSince(logCursor)
 	payload := map[string]any{
 		"faults":             snap.Faults,
 		"connected":          snap.Connected,
@@ -271,17 +279,20 @@ func (s *Server) wsIteration(conn *websocket.Conn) error {
 		"timestamp":          time.Now().Format(time.RFC3339),
 		"serialPorts":        snap.SerialPorts,
 		"selectedSerialPort": snap.SelectedSerialPort,
-		"logLines":           snap.LogLines,
+		"logLines":           logLines,
 	}
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return logCursor, err
 	}
 
 	if err := conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-		return err
+		return logCursor, err
 	}
-	return conn.WriteMessage(websocket.TextMessage, jsonData)
+	if err := conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
+		return logCursor, err
+	}
+	return nextCursor, nil
 }
 
 func (s *Server) apiNowPlayingHandler(c *gin.Context) {

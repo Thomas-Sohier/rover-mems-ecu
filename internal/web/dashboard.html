@@ -770,21 +770,28 @@ function render(d) {
   syncPortSelect(ports, d.selectedSerialPort);
   syncEcuSelect(d.ecuType);
 
-  // Log lines. The server keeps only the last 100 lines and slides that window,
-  // so a naive "append everything past the current child count" freezes once the
-  // window is full. Rebuild the panel whenever the log content actually changes.
+  // Log lines. The server now sends only the lines appended since our last poll
+  // (see LogLinesSince), so append them rather than indexing by DOM position or
+  // rebuilding from a full-ring signature — both of those broke, in different
+  // ways, once the server's 100-line window started sliding.
   const logContainer = document.getElementById('log-container');
   const lines = d.logLines || [];
-  const logSig = lines.join('\n');
-  if (logSig !== lastLogSig) {
-    lastLogSig = logSig;
+  if (lines.length > 0) {
+    // Only follow the tail if the user has not scrolled back to read history.
     const nearBottom = logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight < 40;
-    logContainer.replaceChildren(...lines.map(l => {
+
+    for (const line of lines) {
       const div = document.createElement('div');
       div.className = 'log-line';
-      div.textContent = l;
-      return div;
-    }));
+      div.textContent = line;
+      logContainer.appendChild(div);
+    }
+    // Keep the DOM bounded; the container is a scrollback, not a full history.
+    const MAX_LOG_NODES = 500;
+    while (logContainer.children.length > MAX_LOG_NODES) {
+      logContainer.removeChild(logContainer.firstChild);
+    }
+
     if (nearBottom) logContainer.scrollTop = logContainer.scrollHeight;
   }
 
@@ -793,8 +800,6 @@ function render(d) {
 }
 
 // ── Actions ────────────────────────────────────────────────────
-let lastLogSig = '';
-
 const ECU_TYPES = ['1.x', '1.9', '2J', 'rc5', '3', 'fake'];
 
 // [label, startCommand, stopCommand|null]

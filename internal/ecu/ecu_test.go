@@ -60,12 +60,68 @@ func TestLogLinesCopyIsIndependent(t *testing.T) {
 	}
 }
 
-func TestSnapshotIncludesLogLines(t *testing.T) {
+func TestLogLinesSince(t *testing.T) {
 	s := NewState()
 	s.DebugMode = true
-	s.LogDebug("hello")
+	s.LogDebug("one")
+	s.LogDebug("two")
 
-	if got := s.Snapshot().LogLines; !slices.Equal(got, []string{"hello"}) {
-		t.Errorf("Snapshot().LogLines = %v, want [hello]", got)
+	lines, cursor := s.LogLinesSince(0)
+	if !slices.Equal(lines, []string{"one", "two"}) {
+		t.Fatalf("LogLinesSince(0) = %v, want [one two]", lines)
+	}
+
+	// Nothing new: no lines, cursor unchanged.
+	lines, cursor2 := s.LogLinesSince(cursor)
+	if len(lines) != 0 {
+		t.Errorf("LogLinesSince(cursor) = %v, want empty", lines)
+	}
+	if cursor2 != cursor {
+		t.Errorf("cursor moved without new lines: %d -> %d", cursor, cursor2)
+	}
+
+	// Only the delta comes back.
+	s.LogDebug("three")
+	lines, _ = s.LogLinesSince(cursor)
+	if !slices.Equal(lines, []string{"three"}) {
+		t.Errorf("LogLinesSince(cursor) = %v, want [three]", lines)
+	}
+}
+
+// TestLogLinesSince_StaleCursor covers a consumer that fell so far behind the
+// ring dropped lines it never saw: it must resync to the oldest retained line
+// rather than panic on a negative slice index.
+func TestLogLinesSince_StaleCursor(t *testing.T) {
+	s := NewState()
+	s.DebugMode = true
+	for i := 0; i < maxLogLines*2; i++ {
+		s.LogDebugf("line %d", i)
+	}
+
+	lines, cursor := s.LogLinesSince(0)
+	if len(lines) != maxLogLines {
+		t.Fatalf("stale cursor returned %d lines, want %d", len(lines), maxLogLines)
+	}
+	if lines[0] != "line 100" {
+		t.Errorf("oldest retained line = %q, want %q", lines[0], "line 100")
+	}
+	if cursor != int64(maxLogLines*2) {
+		t.Errorf("cursor = %d, want %d", cursor, maxLogLines*2)
+	}
+}
+
+// TestLogLinesSince_FutureCursor guards against a cursor ahead of the sequence
+// (a stale client reconnecting after a restart) slicing out of range.
+func TestLogLinesSince_FutureCursor(t *testing.T) {
+	s := NewState()
+	s.DebugMode = true
+	s.LogDebug("only")
+
+	lines, cursor := s.LogLinesSince(9999)
+	if len(lines) != 0 {
+		t.Errorf("LogLinesSince(future) = %v, want empty", lines)
+	}
+	if cursor != 1 {
+		t.Errorf("cursor = %d, want 1", cursor)
 	}
 }

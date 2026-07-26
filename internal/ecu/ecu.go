@@ -20,9 +20,13 @@ type State struct {
 	// reentrant, so sharing one mutex would self-deadlock every debug-mode run.
 	mu sync.RWMutex
 
-	// logMu guards LogLines only. Lock ordering is mu -> logMu (Snapshot takes
-	// both); nothing ever takes mu while holding logMu.
+	// logMu guards LogLines and logSeq. Nothing ever takes mu while holding
+	// logMu, nor the reverse.
 	logMu sync.Mutex
+
+	// logSeq counts every line ever appended, so consumers can ask for only what
+	// they have not seen yet instead of re-reading the whole ring.
+	logSeq int64
 
 	// ECU connection state
 	Connected   bool
@@ -80,6 +84,7 @@ func (s *State) appendLog(msg string) {
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
 	s.LogLines = append(s.LogLines, msg)
+	s.logSeq++
 	if len(s.LogLines) > maxLogLines {
 		s.LogLines = s.LogLines[len(s.LogLines)-maxLogLines:]
 	}
@@ -90,6 +95,30 @@ func (s *State) LogLinesCopy() []string {
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
 	return slices.Clone(s.LogLines)
+}
+
+// LogLinesSince returns the debug lines appended after cursor, together with
+// the cursor to pass on the next call. A zero cursor yields the whole retained
+// ring; a cursor older than the ring is clamped to its oldest retained line.
+//
+// Streaming consumers use this instead of LogLinesCopy so a poll that finds
+// nothing new copies nothing, and so they cannot silently miss lines that the
+// ring dropped between polls.
+func (s *State) LogLinesSince(cursor int64) (lines []string, next int64) {
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+
+	oldest := s.logSeq - int64(len(s.LogLines))
+	if cursor < oldest {
+		cursor = oldest
+	}
+	if cursor > s.logSeq {
+		cursor = s.logSeq
+	}
+	if cursor == s.logSeq {
+		return nil, s.logSeq
+	}
+	return slices.Clone(s.LogLines[cursor-oldest:]), s.logSeq
 }
 
 // Lock acquires the write lock.
@@ -114,11 +143,12 @@ type Snapshot struct {
 	SelectedSerialPort string
 	SerialPorts        []string
 	AgentVersion       string
-	LogLines           []string
 }
 
 // Snapshot returns a consistent, copied view of the State under the read lock.
 // It does not mutate the State (in particular it does not consume Alert/Error).
+// Debug log lines are deliberately excluded: they are the largest field by far
+// and only the WebSocket stream wants them, via LogLinesSince.
 func (s *State) Snapshot() Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -133,8 +163,23 @@ func (s *State) Snapshot() Snapshot {
 		SelectedSerialPort: s.SelectedSerialPort,
 		SerialPorts:        slices.Clone(s.SerialPorts),
 		AgentVersion:       s.AgentVersion,
-		LogLines:           s.LogLinesCopy(),
 	}
+}
+
+// IsConnected reports the ECU connection state. Cheaper than Snapshot for
+// callers that need only this field, which otherwise pay for four container
+// copies per request.
+func (s *State) IsConnected() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Connected
+}
+
+// FaultsCopy returns a copy of the current fault list.
+func (s *State) FaultsCopy() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.Faults)
 }
 
 // ConsumeAlertError reads and clears the Alert and Error fields, returning their
